@@ -45,7 +45,7 @@ pytest = ">=9.0.3,<10"
 pytest-cov = ">=3,<8"
 pytest-codspeed = "^5.0.2"
 pytest-asyncio = "^1.3.0"
-bleak-retry-connector = ">=3.8.0"
+bleak-retry-connector = ">=4.6.1"
 bluetooth-adapters = ">=0.21.0"
 
 [tool.poetry.group.docs]
