@@ -72,11 +72,11 @@ asyncio.run(run())
 
 Each proxy is described by a `SMLIGHTDeviceConfig`:
 
-| Key      | Required | Description                                                            |
-| -------- | -------- | --------------------------------------------------------------------- |
-| `source` | yes      | Stable unique id for the proxy, typically its MAC address.            |
-| `name`   | yes      | Human-friendly adapter name shown by `habluetooth`.                   |
-| `host`   | yes      | IP or hostname the UDP proxy server listens on.                       |
+| Key      | Required | Description                                                              |
+| -------- | -------- | ------------------------------------------------------------------------ |
+| `source` | yes      | Stable unique id for the proxy, typically its MAC address.               |
+| `name`   | yes      | Human-friendly adapter name shown by `habluetooth`.                      |
+| `host`   | yes      | IP or hostname the UDP proxy server listens on.                          |
 | `port`   | no       | UDP port of the proxy server; defaults to `SLZB_BLE_SERVER_PORT` (5050). |
 
 `SMLIGHTConnectionManager.start()` returns once the scanner is registered and the
