@@ -16,17 +16,17 @@ host-side client that consumes that server's advertisement stream.
 
 The proxy is **scan only**. It relays raw BLE advertisements but has no
 GATT/active-connection support, so this library registers a non-connectable
-scanner and provides no Bleak *client*.
+scanner and provides no Bleak _client_.
 
 The split is:
 
-| Layer                                            | Where it lives               | Repository                                                                         |
+| Layer                                            | Where it lives               | Repository                                                                        |
 | ------------------------------------------------ | ---------------------------- | --------------------------------------------------------------------------------- |
-| SLZB firmware (UDP BLE proxy server)             | On the SLZB-U device (ESP32) | SLZB-OS                                                                            |
+| SLZB firmware (UDP BLE proxy server)             | On the SLZB-U device (ESP32) | SLZB-OS                                                                           |
 | Python UDP client for the proxy                  | Host (your app)              | [smlight-tech/pysmlight](https://github.com/smlight-tech/pysmlight)               |
-| `bleak`-compatible scanner on top of `pysmlight` | Host (your app)              | **this repo**                                                                      |
+| `bleak`-compatible scanner on top of `pysmlight` | Host (your app)              | **this repo**                                                                     |
 | Remote-scanner bookkeeping primitives            | Host (your app)              | [Bluetooth-Devices/habluetooth](https://github.com/Bluetooth-Devices/habluetooth) |
-| Standard BLE scanner API consumed by user code   | Host (your app)              | [hbldh/bleak](https://github.com/hbldh/bleak)                                      |
+| Standard BLE scanner API consumed by user code   | Host (your app)              | [hbldh/bleak](https://github.com/hbldh/bleak)                                     |
 
 So when you call `bleak.BleakScanner.discover(...)` in an app that has set up a
 `SMLIGHTConnectionManager`, what really happens is:
