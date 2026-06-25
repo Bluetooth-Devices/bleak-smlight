@@ -46,7 +46,18 @@ def connect_scanner(
 
     :class:`SMLIGHTConnectionManager` wires all of this up for the common
     standalone case.
+
+    Raises:
+        ValueError: if ``host`` is empty or ``port`` is outside 1-65535.
+            Without this guard a bad address fails silently inside the
+            proxy client's background retry loop rather than surfacing to
+            the caller.
+
     """
+    if not host:
+        raise ValueError("host must be a non-empty IP/hostname")
+    if not 1 <= port <= 65535:
+        raise ValueError(f"port must be between 1 and 65535, got {port}")
     _LOGGER.debug("%s [%s]: Connecting scanner to %s:%s", name, source, host, port)
     scanner = SMLIGHTScanner(source, name, None, False)
     client = BleProxyClient(

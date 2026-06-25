@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pysmlight import BleProxyClient
 
 from bleak_smlight.backend.scanner import SMLIGHTScanner
@@ -39,3 +40,16 @@ def test_connect_scanner_wires_callback_to_scanner() -> None:
     """The proxy client's callback is the scanner's raw-advert handler."""
     data = connect_scanner(SOURCE, NAME, HOST)
     assert data.client.callback == data.scanner._handle_raw_advertisement
+
+
+def test_connect_scanner_rejects_empty_host() -> None:
+    """An empty host raises ValueError instead of failing silently later."""
+    with pytest.raises(ValueError, match="host"):
+        connect_scanner(SOURCE, NAME, "")
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536, 100000])
+def test_connect_scanner_rejects_out_of_range_port(port: int) -> None:
+    """A port outside 1-65535 raises ValueError."""
+    with pytest.raises(ValueError, match="port"):
+        connect_scanner(SOURCE, NAME, HOST, port=port)
