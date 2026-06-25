@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from bleak_retry_connector import BleakSlotManager
-from bluetooth_adapters import BluetoothAdapters
+from bluetooth_adapters import get_adapters
 from habluetooth import BluetoothManager, set_manager
 
 
@@ -12,5 +12,5 @@ from habluetooth import BluetoothManager, set_manager
 def manager() -> None:
     """Install a real habluetooth manager so scanners can register."""
     slot_manager = BleakSlotManager()
-    bluetooth_adapters = BluetoothAdapters()
+    bluetooth_adapters = get_adapters()
     set_manager(BluetoothManager(bluetooth_adapters, slot_manager))
