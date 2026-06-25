@@ -124,3 +124,37 @@ async def test_stop_before_start_is_noop(config: SMLIGHTDeviceConfig) -> None:
     manager = SMLIGHTConnectionManager(config)
     await manager.stop()
     assert manager._client is None
+
+
+@pytest.mark.asyncio
+async def test_stop_unregisters_scanner_even_if_client_stop_raises(
+    config: SMLIGHTDeviceConfig,
+) -> None:
+    """A failing client.stop() still unregisters and unsets the scanner."""
+    scanner = Mock()
+    unsetup = Mock()
+    scanner.async_setup = Mock(return_value=unsetup)
+    client = Mock()
+    client.start = AsyncMock()
+    client.stop = Mock(side_effect=RuntimeError("transport already closed"))
+    data = Mock(scanner=scanner, client=client)
+    unregister = Mock()
+    ha_manager = Mock()
+    ha_manager.async_register_scanner = Mock(return_value=unregister)
+
+    with (
+        patch("bleak_smlight.connection_manager.connect_scanner", return_value=data),
+        patch("bleak_smlight.connection_manager.get_manager", return_value=ha_manager),
+    ):
+        manager = SMLIGHTConnectionManager(config)
+        await manager.start()
+        with pytest.raises(RuntimeError, match="transport already closed"):
+            await manager.stop()
+
+    # The scanner is torn down despite the client failure, so the manager is
+    # left in a clean stopped state rather than leaking the registration.
+    unregister.assert_called_once_with()
+    unsetup.assert_called_once_with()
+    assert manager._client is None
+    assert cast(object, manager._unregister_scanner) is None
+    assert cast(object, manager._unsetup_scanner) is None
