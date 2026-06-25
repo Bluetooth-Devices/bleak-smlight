@@ -85,6 +85,31 @@ respond, because the underlying `pysmlight.BleProxyClient` retries in the
 background. Call `start()` once per manager instance; a second call raises
 `RuntimeError`. `stop()` is always safe to call, including before `start()`.
 
+`start()` is atomic: if registering the scanner or starting the proxy client
+fails, it unwinds whatever it had already set up and re-raises, leaving the
+manager in its pre-`start()` state. Nothing is leaked, so you can build a fresh
+manager and try again.
+
+## Using the manager as an async context manager
+
+`SMLIGHTConnectionManager` is an async context manager, so `async with` can pair
+`start()` and `stop()` for you instead of a `try`/`finally`:
+
+```python
+import habluetooth
+
+from bleak_smlight import SMLIGHTConnectionManager
+
+await habluetooth.BluetoothManager().async_setup()
+
+async with SMLIGHTConnectionManager(
+    {"source": "AA:BB:CC:DD:EE:FF", "name": "slzb-1", "host": "10.0.0.5"}
+):
+    # The scanner is registered for the duration of this block; use bleak
+    # normally here. ``stop()`` runs automatically on exit, even on error.
+    ...
+```
+
 ## Advanced: wiring `connect_scanner` directly
 
 `SMLIGHTConnectionManager` is the recommended entry point: it builds the scanner,

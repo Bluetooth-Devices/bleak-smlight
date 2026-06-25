@@ -11,6 +11,7 @@ from .connect import SLZB_BLE_SERVER_PORT, connect_scanner
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from pysmlight import BleProxyClient
 
@@ -66,10 +67,27 @@ class SMLIGHTConnectionManager:
             )
         data = connect_scanner(self._source, self._name, self._host, self._port)
         scanner = data.scanner
-        self._unsetup_scanner = scanner.async_setup()
-        self._unregister_scanner = get_manager().async_register_scanner(scanner)
+        # Build up the registration in stages, unwinding any completed stage if
+        # a later one fails. Registering a scanner whose ``source`` is already
+        # known raises from habluetooth; without rollback that would leak the
+        # scanner's ``async_setup`` teardown and leave a half-started manager
+        # that cannot be retried (``_client`` stays ``None`` so a second
+        # ``start()`` silently re-runs and leaks again).
+        unsetup = scanner.async_setup()
+        try:
+            unregister = get_manager().async_register_scanner(scanner)
+        except BaseException:
+            unsetup()
+            raise
+        try:
+            await data.client.start()
+        except BaseException:
+            unregister()
+            unsetup()
+            raise
+        self._unsetup_scanner = unsetup
+        self._unregister_scanner = unregister
         self._client = data.client
-        await self._client.start()
 
     async def stop(self) -> None:
         """Stop the BLE proxy client and unregister the scanner."""
@@ -82,3 +100,17 @@ class SMLIGHTConnectionManager:
         if self._unsetup_scanner is not None:
             self._unsetup_scanner()
             self._unsetup_scanner = None
+
+    async def __aenter__(self) -> SMLIGHTConnectionManager:
+        """Start the manager on entry and return it."""
+        await self.start()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Stop the manager on exit, regardless of how the block exited."""
+        await self.stop()
