@@ -20,8 +20,6 @@ import habluetooth
 
 from bleak_smlight import SMLIGHTConnectionManager, SMLIGHTDeviceConfig
 
-CONNECTION_TIMEOUT = 5
-
 # An unlimited number of SLZB BLE proxies can be added here. ``source`` is a
 # stable unique id for the proxy (typically its MAC address), ``host`` is the
 # IP/hostname the UDP proxy server listens on, ``port`` is optional and
@@ -55,10 +53,10 @@ async def run() -> None:
     managers = [SMLIGHTConnectionManager(device) for device in SMLIGHT_DEVICES]
     await habluetooth.BluetoothManager().async_setup()
     try:
-        await asyncio.wait(
-            [asyncio.create_task(manager.start()) for manager in managers],
-            timeout=CONNECTION_TIMEOUT,
-        )
+        # start() does not block on the device (the proxy client retries in
+        # the background), so gather them concurrently and let any real
+        # registration error surface instead of being swallowed.
+        await asyncio.gather(*(manager.start() for manager in managers))
         await example_app()
     finally:
         await asyncio.gather(*(manager.stop() for manager in managers))
