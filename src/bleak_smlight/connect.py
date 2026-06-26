@@ -54,4 +54,5 @@ def connect_scanner(
         callback=scanner._handle_raw_advertisement,
         esp32_port=port,
     )
+    scanner.set_client(client)
     return SMLIGHTClientData(scanner=scanner, client=client)
