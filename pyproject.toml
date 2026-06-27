@@ -1,6 +1,6 @@
 [project]
 name = "bleak-smlight"
-version = "1.0.0"
+version = "1.1.0"
 description = "Bleak backend for SMLIGHT SLZB Bluetooth proxies"
 authors = [
     { name = "Bluetooth Devices Authors", email = "bluetooth@koston.org" },
