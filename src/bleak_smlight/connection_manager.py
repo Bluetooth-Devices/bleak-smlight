@@ -79,8 +79,9 @@ class SMLIGHTConnectionManager:
         failure stopping the client cannot leave the scanner registered
         (which would block recreating a manager for the same ``source``).
         State is cleared up front, so a failed ``stop()`` still leaves the
-        manager in a stopped state. The first exception, if any, propagates
-        once all steps have run.
+        manager in a stopped state. An exception, if any, propagates once all
+        steps have run; if several steps raise, they are chained (the last
+        surfaces with the earlier ones as its ``__context__``).
         """
         client, self._client = self._client, None
         unregister, self._unregister_scanner = self._unregister_scanner, None
