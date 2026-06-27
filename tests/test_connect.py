@@ -42,10 +42,11 @@ def test_connect_scanner_wires_callback_to_scanner() -> None:
     assert data.client.callback == data.scanner._handle_raw_advertisement
 
 
-def test_connect_scanner_rejects_empty_host() -> None:
-    """An empty host raises ValueError instead of failing silently later."""
+@pytest.mark.parametrize("host", ["", " ", "   ", "\t"])
+def test_connect_scanner_rejects_empty_host(host: str) -> None:
+    """An empty/whitespace host raises ValueError instead of failing later."""
     with pytest.raises(ValueError, match="host"):
-        connect_scanner(SOURCE, NAME, "")
+        connect_scanner(SOURCE, NAME, host)
 
 
 @pytest.mark.parametrize("port", [0, -1, 65536, 100000])
