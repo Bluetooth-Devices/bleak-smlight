@@ -200,3 +200,41 @@ async def test_async_request_active_window_error(scanner: SMLIGHTScanner) -> Non
     success = await scanner.async_request_active_window(0.01)
     assert success is False
     client.set_active_window.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_honors_midwindow_repin(
+    scanner: SMLIGHTScanner,
+) -> None:
+    """A repin that lands mid-window wins over the open-time snapshot."""
+    client = MagicMock(spec=BleProxyClient)
+    scanner.set_client(client)
+    scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
+
+    task = asyncio.create_task(scanner.async_request_active_window(0.1))
+    await asyncio.sleep(0.01)
+    # Repin to ACTIVE while the window is still open.
+    scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    client.set_scan_mode.reset_mock()
+
+    assert await task is True
+    # Restore reflects the live ACTIVE repin, not the PASSIVE snapshot.
+    client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_ACTIVE)
+    assert scanner.current_mode == BluetoothScanningMode.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_auto_restores_passive(
+    scanner: SMLIGHTScanner,
+) -> None:
+    """AUTO intent restores the firmware to PASSIVE after a window."""
+    client = MagicMock(spec=BleProxyClient)
+    scanner.set_client(client)
+    scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+    client.reset_mock()
+
+    assert await scanner.async_request_active_window(0.01) is True
+
+    client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_PASSIVE)
+    assert scanner.requested_mode == BluetoothScanningMode.AUTO
+    assert scanner.current_mode == BluetoothScanningMode.AUTO
