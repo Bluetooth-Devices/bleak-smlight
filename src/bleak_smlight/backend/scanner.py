@@ -82,6 +82,12 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         firmware_mode = _HA_TO_FIRMWARE_MODE.get(
             mode, BleProxyMode.BLE_PROXY_MODE_PASSIVE
         )
+        _LOGGER.debug(
+            "%s: Setting scan mode: intent=%s, firmware_mode=%s",
+            self.name,
+            mode.name,
+            firmware_mode.name,
+        )
         try:
             client.set_scan_mode(firmware_mode)
         except Exception as ex:
@@ -122,6 +128,12 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
 
             # Request active scan window (convert duration to milliseconds)
             timeout_ms = min(int(duration * 1000), 65535)
+            _LOGGER.debug(
+                "%s: Requesting active scan window: duration=%.3fs (%d ms)",
+                self.name,
+                duration,
+                timeout_ms,
+            )
             try:
                 client.set_active_window(timeout_ms)
             except Exception as ex:
@@ -146,6 +158,13 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
                 self.set_current_mode(target)
                 restore = _HA_TO_FIRMWARE_MODE.get(
                     target, BleProxyMode.BLE_PROXY_MODE_PASSIVE
+                )
+                _LOGGER.debug(
+                    "%s: Active scan window finished. Restoring scan mode: "
+                    "target=%s, firmware_mode=%s",
+                    self.name,
+                    target.name,
+                    restore.name,
                 )
                 try:
                     client.set_scan_mode(restore)
@@ -177,6 +196,7 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         device_mac = int_to_bluetooth_address(
             int.from_bytes(mac_bytes, byteorder="little")
         )
+
         self._async_on_raw_advertisement(
             device_mac,
             rssi,
