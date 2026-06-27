@@ -62,9 +62,9 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         Unlike ESPHome scanners, the firmware does not push spontaneous
         scanner-state or mode update packets back to the client. While the
         firmware sends ACK packets to acknowledge configuration commands, the
-        integration currently ignores them. Therefore, the local scanner
-        tracks and pins the requested/current modes entirely locally based on
-        the integration's intent.
+        integration currently ignores them as they may be ambiguous. Therefore,
+        the local scanner tracks and pins the requested/current modes entirely
+        locally based on the integration's intent.
         """
         self._intent = mode
         self.set_requested_mode(mode)
