@@ -7,7 +7,7 @@
 project = "bleak-smlight"
 copyright = "2026, Bluetooth Devices Authors"
 author = "Bluetooth Devices Authors"
-release = "1.0.0"
+release = "1.1.0"
 
 # General configuration
 extensions = [

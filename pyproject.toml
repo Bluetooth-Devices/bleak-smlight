@@ -1,6 +1,6 @@
 [project]
 name = "bleak-smlight"
-version = "1.0.0"
+version = "1.1.0"
 description = "Bleak backend for SMLIGHT SLZB Bluetooth proxies"
 authors = [
     { name = "Bluetooth Devices Authors", email = "bluetooth@koston.org" },
@@ -38,7 +38,7 @@ script = "build_ext.py"
 python = ">=3.12,<4"
 bluetooth-data-tools = ">=1.18.0"
 habluetooth = ">=6.4.0"
-pysmlight = ">=0.4.0"
+pysmlight = ">=0.5.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=9.0.3,<10"
