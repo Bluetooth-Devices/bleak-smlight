@@ -72,13 +72,27 @@ class SMLIGHTConnectionManager:
         await self._client.start()
 
     async def stop(self) -> None:
-        """Stop the BLE proxy client and unregister the scanner."""
-        if self._client is not None:
-            self._client.stop()
-            self._client = None
-        if self._unregister_scanner is not None:
-            self._unregister_scanner()
-            self._unregister_scanner = None
-        if self._unsetup_scanner is not None:
-            self._unsetup_scanner()
-            self._unsetup_scanner = None
+        """
+        Stop the BLE proxy client and unregister the scanner.
+
+        Every teardown step runs even if an earlier one raises, so a
+        failure stopping the client cannot leave the scanner registered
+        (which would block recreating a manager for the same ``source``).
+        State is cleared up front, so a failed ``stop()`` still leaves the
+        manager in a stopped state. An exception, if any, propagates once all
+        steps have run; if several steps raise, they are chained (the last
+        surfaces with the earlier ones as its ``__context__``).
+        """
+        client, self._client = self._client, None
+        unregister, self._unregister_scanner = self._unregister_scanner, None
+        unsetup, self._unsetup_scanner = self._unsetup_scanner, None
+        try:
+            if client is not None:
+                client.stop()
+        finally:
+            try:
+                if unregister is not None:
+                    unregister()
+            finally:
+                if unsetup is not None:
+                    unsetup()
