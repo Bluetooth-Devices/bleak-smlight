@@ -58,8 +58,14 @@ def test_handle_raw_advertisement(
     """Benchmark forwarding a batch of advertisements 1000 times."""
     scanner = SMLIGHTScanner(PROXY_SOURCE, PROXY_NAME, None, False)
 
+    # convert MAC addresses to little-endian bytes for the callback
+    converted_batch = [
+        (bytes.fromhex(mac.replace(":", ""))[::-1], rssi, address_type, raw)
+        for mac, rssi, address_type, raw in batch
+    ]
+
     @benchmark
     def _benchmark() -> None:
         for _ in range(1000):
-            for mac, rssi, address_type, raw in batch:
-                scanner._handle_raw_advertisement(mac, rssi, address_type, raw)
+            for mac_bytes, rssi, address_type, raw in converted_batch:
+                scanner._handle_raw_advertisement(mac_bytes, rssi, address_type, raw)
