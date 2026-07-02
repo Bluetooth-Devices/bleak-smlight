@@ -1883,14 +1883,14 @@ files = [
 
 [[package]]
 name = "pysmlight"
-version = "0.5.0"
+version = "0.5.2"
 description = "A library implementing API control of the SMLIGHT SLZB-06 LAN Coordinators."
 optional = false
 python-versions = ">=3.12"
 groups = ["main"]
 files = [
-    {file = "pysmlight-0.5.0-py3-none-any.whl", hash = "sha256:fc1500eb4188dcb04b40cb4084123acf822c71b0e0999e12cd7df8e6a529eecc"},
-    {file = "pysmlight-0.5.0.tar.gz", hash = "sha256:bbb3ba5795fb39afd0772e0e6e532f5cc8cf8e83fb490dc6423677b171d3dd33"},
+    {file = "pysmlight-0.5.2-py3-none-any.whl", hash = "sha256:e63f090388ff411907c0cd578c2962b79495ebffbf95923cc554d53bf5b0f3f7"},
+    {file = "pysmlight-0.5.2.tar.gz", hash = "sha256:9c7c95d6d68156673b7d845827a387eb4b5df750c3bf0602c148163cbb98c0f7"},
 ]
 
 [package.dependencies]
@@ -3068,4 +3068,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4"
-content-hash = "50800c4bef058f3d70ccfd161842881aec7809c6b0be3be0aeccf6b2cd2bdd8a"
+content-hash = "289ff3415b3bdb16c13d4d3939e898ff3d76cd358298a5f81e7ac3699311263b"
