@@ -37,7 +37,7 @@ script = "build_ext.py"
 [tool.poetry.dependencies]
 python = ">=3.12,<4"
 bluetooth-data-tools = ">=1.18.0"
-habluetooth = ">=6.4.0"
+habluetooth = ">=6.26.2"
 pysmlight = ">=0.5.0"
 
 [tool.poetry.group.dev.dependencies]
