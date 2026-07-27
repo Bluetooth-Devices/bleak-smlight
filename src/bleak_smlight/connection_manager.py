@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
     from pysmlight import BleProxyClient
 
+    from .backend.scanner import SMLIGHTScanner
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -44,8 +46,21 @@ class SMLIGHTConnectionManager:
         self._host = config["host"]
         self._port = config.get("port", SLZB_BLE_SERVER_PORT)
         self._client: BleProxyClient | None = None
+        self._scanner: SMLIGHTScanner | None = None
         self._unregister_scanner: Callable[[], None] | None = None
         self._unsetup_scanner: Callable[[], None] | None = None
+
+    @property
+    def scanner(self) -> SMLIGHTScanner | None:
+        """
+        The registered scanner, or ``None`` before ``start()`` / after ``stop()``.
+
+        This is the handle for scan-mode control — the scanner owns
+        ``async_set_scanning_mode`` (pin PASSIVE/ACTIVE, or AUTO to let
+        habluetooth's scheduler request active windows on demand). Without
+        it the proxy stays on its firmware default.
+        """
+        return self._scanner
 
     async def start(self) -> None:
         """
@@ -68,6 +83,7 @@ class SMLIGHTConnectionManager:
         scanner = data.scanner
         self._unsetup_scanner = scanner.async_setup()
         self._unregister_scanner = get_manager().async_register_scanner(scanner)
+        self._scanner = scanner
         self._client = data.client
         await self._client.start()
 
@@ -84,6 +100,7 @@ class SMLIGHTConnectionManager:
         surfaces with the earlier ones as its ``__context__``).
         """
         client, self._client = self._client, None
+        self._scanner = None
         unregister, self._unregister_scanner = self._unregister_scanner, None
         unsetup, self._unsetup_scanner = self._unsetup_scanner, None
         try:

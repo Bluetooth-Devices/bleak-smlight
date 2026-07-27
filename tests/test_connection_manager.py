@@ -119,6 +119,30 @@ async def test_stop_tears_down_in_order(config: SMLIGHTDeviceConfig) -> None:
 
 
 @pytest.mark.asyncio
+async def test_scanner_property_exposes_registered_scanner(
+    config: SMLIGHTDeviceConfig,
+) -> None:
+    """``scanner`` is the registered scanner only while the manager runs."""
+    scanner = Mock()
+    scanner.async_setup = Mock(return_value=Mock())
+    client = Mock()
+    client.start = AsyncMock()
+    data = Mock(scanner=scanner, client=client)
+
+    with (
+        patch("bleak_smlight.connection_manager.connect_scanner", return_value=data),
+        patch("bleak_smlight.connection_manager.get_manager", return_value=MagicMock()),
+    ):
+        manager = SMLIGHTConnectionManager(config)
+        assert manager.scanner is None
+        await manager.start()
+        assert manager.scanner is scanner
+        await manager.stop()
+
+    assert manager.scanner is None
+
+
+@pytest.mark.asyncio
 async def test_stop_before_start_is_noop(config: SMLIGHTDeviceConfig) -> None:
     """stop() is safe to call on a manager that was never started."""
     manager = SMLIGHTConnectionManager(config)

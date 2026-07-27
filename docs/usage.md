@@ -83,6 +83,30 @@ respond, because the underlying `pysmlight.BleProxyClient` retries in the
 background. Call `start()` once per manager instance; a second call raises
 `RuntimeError`. `stop()` is always safe to call, including before `start()`.
 
+## Scanning modes
+
+The proxy starts on its firmware default. To pin a mode, reach the scanner
+through `manager.scanner` — it is the registered `SMLIGHTScanner` between
+`start()` and `stop()`, and `None` outside that window:
+
+```python
+from habluetooth import BluetoothScanningMode
+
+await manager.start()
+assert manager.scanner is not None
+manager.scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+```
+
+- `PASSIVE` — listen only; the proxy never sends scan requests.
+- `ACTIVE` — the proxy requests scan responses continuously.
+- `AUTO` — the firmware stays passive, and `habluetooth`'s scheduler asks for
+  short active windows on demand via `async_request_active_window()`. The
+  firmware returns to passive when a window times out.
+
+Modes are tracked locally: the SLZB firmware acknowledges configuration
+commands but does not push mode updates back, so the scanner reports the mode
+this library last asked for.
+
 ## Advanced: wiring `connect_scanner` directly
 
 `SMLIGHTConnectionManager` is the recommended entry point: it builds the scanner,
