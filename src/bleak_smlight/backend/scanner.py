@@ -25,6 +25,29 @@ _HA_TO_FIRMWARE_MODE: dict[BluetoothScanningMode, BleProxyMode] = {
     BluetoothScanningMode.AUTO: BleProxyMode.BLE_PROXY_MODE_PASSIVE,
 }
 
+# ``pysmlight`` packs the active-window timeout into an unsigned 16-bit
+# millisecond field, so the firmware cannot hold a window open longer.
+_MAX_ACTIVE_WINDOW_MS = 65535
+
+
+def _proxy_ready(client: BleProxyClient) -> bool:
+    """
+    Whether the proxy has acknowledged the client's PING.
+
+    Every outbound command on ``BleProxyClient`` — ``set_scan_mode``,
+    ``set_active_window`` — is guarded by ``if self.transport:`` with no
+    ``else``, so before the proxy answers it sends nothing and raises
+    nothing. ``transport`` itself is not a usable readiness signal: it is
+    assigned from a ``create_datagram_endpoint`` bind on ``0.0.0.0`` that
+    never contacts the device. The ACK behind this event is the only proof
+    the device replied.
+
+    ``pysmlight`` exposes no public "connected" signal; this attribute is
+    stable across the supported 0.5.x range and is read in exactly one
+    place so a future public accessor is a one-line swap.
+    """
+    return client._connected_evt.is_set()
+
 
 class SMLIGHTScanner(BaseHaRemoteScanner):
     """
@@ -40,7 +63,7 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         super().__init__(*args, **kwargs)
         self._client: BleProxyClient | None = None
         self._intent: BluetoothScanningMode | None = None
-        self._active_window_lock = asyncio.Lock()
+        self._window_end: float | None = None
         self._pending_mode_push: asyncio.Task[None] | None = None
 
     def _unsetup(self) -> None:
@@ -81,7 +104,9 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         has no ``else`` — and be dropped without raising. The scanner
         would then report a mode the radio was never told about. The
         deferred push re-reads :attr:`_intent`, so the most recent pin
-        wins and repeated calls before the handshake collapse into one.
+        wins and repeated calls before the handshake collapse into one. It
+        stands down if an active window opened in the meantime, leaving the
+        window's restore to deliver the same mode.
         """
         self._intent = mode
         self.set_requested_mode(mode)
@@ -96,12 +121,7 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
             )
             return
 
-        # ``transport`` alone is not proof of reachability: it is assigned
-        # from a local socket bind that never contacts the device. The ACK
-        # that sets this event is. ``pysmlight`` exposes no public
-        # "connected" signal; the event is stable across the supported
-        # 0.5.x range.
-        if not client._connected_evt.is_set():
+        if not _proxy_ready(client):
             if self._pending_mode_push is None:
                 _LOGGER.debug(
                     "%s: proxy handshake pending; deferring scan mode %s",
@@ -121,6 +141,22 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
             await client._connected_evt.wait()
         finally:
             self._pending_mode_push = None
+        # An active window may already have opened: the same ACK that wakes
+        # this task also opens the gate in
+        # ``async_request_active_window``, and a scheduler tick already in
+        # the ready queue runs before this callback. Pushing now would send
+        # the firmware out of a window the scanner still reports as ACTIVE
+        # for its full duration — the exact silent divergence this deferral
+        # exists to prevent. The window's own restore path sends the live
+        # ``_intent``, which is what this push would have sent, so standing
+        # down is not a lost command.
+        if self._window_end is not None:
+            _LOGGER.debug(
+                "%s: active window in flight; leaving the deferred scan mode "
+                "to the window's restore",
+                self.name,
+            )
+            return
         # ``async_set_scanning_mode`` pins ``_intent`` before it ever
         # creates this task, and nothing clears it, so the latest pin is
         # always available here.
@@ -144,6 +180,16 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         except Exception as ex:
             _LOGGER.debug("%s: failed to set scan mode: %s", self.name, ex)
 
+    def _arm_active_window(self, client: BleProxyClient, timeout_ms: int) -> bool:
+        """Ask the proxy for a ``timeout_ms`` window; ``False`` if it failed."""
+        _LOGGER.debug("%s: Requesting active scan window: %d ms", self.name, timeout_ms)
+        try:
+            client.set_active_window(timeout_ms)
+        except Exception as ex:
+            _LOGGER.debug("%s: failed to enter active scan window: %s", self.name, ex)
+            return False
+        return True
+
     async def async_request_active_window(self, duration: float) -> bool:
         """
         Request an active scan window on the proxy for ``duration`` seconds.
@@ -152,79 +198,113 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         prefers the integration's pinned intent (set via
         :meth:`async_set_scanning_mode`) — so AUTO returns to PASSIVE on
         the firmware even though ``requested_mode`` stays AUTO — and
-        falls back to the last known ``requested_mode`` when no intent has
-        been pinned. If no prior mode is known the proxy is returned to
-        PASSIVE.
+        falls back to ``requested_mode`` when no intent has been pinned.
 
-        Only one window may be open at a time; a request that arrives while
-        another window is in flight returns ``False`` immediately so the
-        caller can decide whether to retry.
+        A request that arrives while a window is already open extends it
+        rather than opening a second one: re-arming the firmware timer is
+        idempotent, so the longer of the two windows wins and a request
+        that expires sooner is already covered. Both cases return
+        ``True`` — the radio is active for the requested span either
+        way. Only the coroutine that opened the window sleeps and
+        restores the prior mode.
+
+        The window never outlasts what the firmware was told: the proxy
+        timeout is an unsigned 16-bit millisecond field, so a longer
+        ``duration`` is clamped and the sleep follows the clamp instead of
+        leaving the scanner reporting ACTIVE after the radio went passive.
+
+        Returns ``False`` without touching the reported mode when the
+        proxy has not completed its handshake — the command would be
+        dropped on the floor, and claiming ACTIVE for a window the radio
+        never opened is worse than reporting the request as ignored.
+
+        Windows are also refused unless ``requested_mode`` is still
+        AUTO: repinning the scanner does not retire its auto-scan
+        worker, so this method is the only place an explicit
+        PASSIVE/ACTIVE pin can be honored.
         """
+        # habluetooth binds the auto-scan worker at registration time and
+        # only retires it when the scanner is unregistered —
+        # ``scanner_mode_changed`` notifies manager callbacks, not the
+        # scheduler. So a scanner repinned away from AUTO via
+        # ``async_set_scanning_mode`` keeps being ticked, and without this
+        # guard it would keep flipping the firmware to ACTIVE behind an
+        # explicit PASSIVE pin. ``HaScanner`` refuses here for the same
+        # reason.
+        if self.requested_mode is not BluetoothScanningMode.AUTO:
+            return False
         client = self._client
         if client is None:
             return False
         # Defensive: guard the asyncio.sleep against non-finite / negative
         # durations that an external caller might pass. Negative or NaN
         # would otherwise propagate into a confusing scheduler error.
-        if not math.isfinite(duration) or duration < 0:
+        # Zero is refused too: it would cost an arm/restore packet pair
+        # for a window that is over before it opens.
+        if not math.isfinite(duration) or duration <= 0:
             return False
-        # Safe: no await between the .locked() check and the acquire
-        # inside `async with`, so asyncio cannot schedule another
-        # coroutine in between and the check / acquire is effectively
-        # atomic on this lock.
-        if self._active_window_lock.locked():
-            return False
-        async with self._active_window_lock:
-            prior = self._intent if self._intent is not None else self.requested_mode
-
-            # Request active scan window (convert duration to milliseconds)
-            timeout_ms = min(int(duration * 1000), 65535)
+        # Arming before the proxy answers would report ACTIVE for the whole
+        # window over a radio that never left PASSIVE.
+        if not _proxy_ready(client):
             _LOGGER.debug(
-                "%s: Requesting active scan window: duration=%.3fs (%d ms)",
+                "%s: proxy has not completed its handshake; "
+                "ignoring active scan window request",
                 self.name,
-                duration,
-                timeout_ms,
+            )
+            return False
+        timeout_ms = min(int(duration * 1000), _MAX_ACTIVE_WINDOW_MS)
+        window_end = MONOTONIC_TIME() + timeout_ms / 1000
+
+        # Safe: no await between reading and writing ``_window_end``, so
+        # asyncio cannot interleave another request and the open-or-extend
+        # decision is atomic without a lock.
+        if (open_until := self._window_end) is not None:
+            if window_end <= open_until:
+                return True
+            if not self._arm_active_window(client, timeout_ms):
+                return False
+            self._window_end = window_end
+            return True
+
+        prior = self._intent if self._intent is not None else self.requested_mode
+        if not self._arm_active_window(client, timeout_ms):
+            return False
+        self._window_end = window_end
+        self.set_current_mode(BluetoothScanningMode.ACTIVE)
+
+        try:
+            # Re-read ``_window_end`` every pass so an extension that
+            # lands mid-sleep keeps the radio active for its full span.
+            while (remaining := self._window_end - MONOTONIC_TIME()) > 0:
+                await asyncio.sleep(remaining)
+        finally:
+            self._window_end = None
+            # Honor a live repin (async_set_scanning_mode is sync and
+            # lock-free, so it can land mid-window) over the snapshot
+            # taken when the window opened. Fall back to the open-time
+            # snapshot only when no intent was ever pinned — there
+            # requested_mode reports ACTIVE mid-window, so a live read
+            # would pin ACTIVE forever.
+            target = self._intent if self._intent is not None else prior
+            self.set_current_mode(target)
+            restore = _HA_TO_FIRMWARE_MODE.get(
+                target, BleProxyMode.BLE_PROXY_MODE_PASSIVE
+            )
+            _LOGGER.debug(
+                "%s: Active scan window finished. Restoring scan mode: "
+                "target=%s, firmware_mode=%s",
+                self.name,
+                target.name,
+                restore.name,
             )
             try:
-                client.set_active_window(timeout_ms)
+                client.set_scan_mode(restore)
             except Exception as ex:
-                _LOGGER.debug(
-                    "%s: failed to enter active scan window: %s", self.name, ex
-                )
-                return False
-            self.set_current_mode(BluetoothScanningMode.ACTIVE)
-
-            try:
-                await asyncio.sleep(duration)
-            finally:
-                # Honor a live repin (async_set_scanning_mode is sync and
-                # lock-free, so it can land mid-window) over the snapshot
-                # taken when the window opened. Fall back to the open-time
-                # snapshot only when no intent was ever pinned — there
-                # requested_mode reports ACTIVE mid-window, so a live read
-                # would pin ACTIVE forever.
-                target = self._intent if self._intent is not None else prior
-                if target is None:
-                    target = BluetoothScanningMode.PASSIVE
-                self.set_current_mode(target)
-                restore = _HA_TO_FIRMWARE_MODE.get(
-                    target, BleProxyMode.BLE_PROXY_MODE_PASSIVE
-                )
-                _LOGGER.debug(
-                    "%s: Active scan window finished. Restoring scan mode: "
-                    "target=%s, firmware_mode=%s",
+                _LOGGER.warning(
+                    "%s: failed to restore scan mode after active window: %s",
                     self.name,
-                    target.name,
-                    restore.name,
+                    ex,
                 )
-                try:
-                    client.set_scan_mode(restore)
-                except Exception as ex:
-                    _LOGGER.warning(
-                        "%s: failed to restore scan mode after active window: %s",
-                        self.name,
-                        ex,
-                    )
         return True
 
     def _handle_raw_advertisement(
