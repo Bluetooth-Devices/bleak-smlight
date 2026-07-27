@@ -20,11 +20,6 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# How often to re-check for the proxy client's UDP transport before
-# pushing the configured mode. The connect loop creates the endpoint on
-# its first pass, so this normally resolves on the first tick.
-_TRANSPORT_POLL_INTERVAL = 0.1
-
 
 class SMLIGHTDeviceConfig(TypedDict):
     """Configuration for one SMLIGHT SLZB BLE proxy device."""
@@ -84,7 +79,7 @@ class SMLIGHTConnectionManager:
         A configured ``mode`` is seeded on the scanner before it is
         registered (habluetooth binds the auto-scan scheduler there). The
         matching firmware command is handed to a background task, because
-        the proxy client has no transport to send it on yet when
+        the proxy has not answered the client's handshake yet when
         ``start()`` returns; ``start()`` itself stays non-blocking.
 
         Raises:
@@ -117,16 +112,30 @@ class SMLIGHTConnectionManager:
         mode: BluetoothScanningMode,
     ) -> None:
         """
-        Pin ``mode`` once the proxy client has a transport to send it on.
+        Pin ``mode`` once the proxy has answered the client's handshake.
 
         ``BleProxyClient.start()`` only schedules its connect loop, so the
         UDP endpoint does not exist yet when it returns — and
         ``set_scan_mode`` is a silent no-op while ``transport`` is
         ``None``. Setting the mode inline would therefore pin it locally
-        and never reach the firmware. Cancelled by :meth:`stop`.
+        and never reach the firmware.
+
+        Waiting for ``transport`` alone is not enough either: it is
+        assigned as soon as the local datagram socket is bound, which
+        happens without contacting the device. The PING/ACK round trip
+        that follows is what proves the proxy is reachable, and a
+        handshake that times out closes that transport and retries with
+        a growing backoff. A mode pushed in the gap goes to a socket
+        with nothing on the far end, is never acknowledged and never
+        re-sent, so the scanner reports one mode while the firmware
+        stays on another. Waiting on the connected event instead pushes
+        on a transport that has demonstrably reached the device.
+
+        ``pysmlight`` exposes no public "connected" signal, so this
+        reads its event directly; the attribute is stable across the
+        supported 0.5.x range. Cancelled by :meth:`stop`.
         """
-        while client.transport is None:
-            await asyncio.sleep(_TRANSPORT_POLL_INTERVAL)
+        await client._connected_evt.wait()
         scanner.async_set_scanning_mode(mode)
 
     async def stop(self) -> None:
@@ -135,7 +144,7 @@ class SMLIGHTConnectionManager:
 
         A pending mode push is cancelled first, so a manager stopped
         before the proxy ever answered leaves no task waiting on a
-        transport that will never appear.
+        handshake that will never complete.
 
         Every teardown step runs even if an earlier one raises, so a
         failure stopping the client cannot leave the scanner registered
