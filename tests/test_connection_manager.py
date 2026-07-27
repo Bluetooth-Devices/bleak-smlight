@@ -92,9 +92,12 @@ async def test_start_applies_configured_mode(config: SMLIGHTDeviceConfig) -> Non
     data = Mock(scanner=scanner, client=client)
     ha_manager = Mock()
     calls: list[str] = []
-    ha_manager.async_register_scanner = Mock(
-        side_effect=lambda _scanner: calls.append("register") or Mock()
-    )
+
+    def _register(_scanner):
+        calls.append("register")
+        return Mock()
+
+    ha_manager.async_register_scanner = Mock(side_effect=_register)
     client.start = AsyncMock(side_effect=lambda: calls.append("client_start"))
     scanner.async_set_scanning_mode = Mock(
         side_effect=lambda _mode: calls.append("set")
@@ -179,12 +182,13 @@ async def test_scanner_property_exposes_registered_scanner(
         patch("bleak_smlight.connection_manager.get_manager", return_value=MagicMock()),
     ):
         manager = SMLIGHTConnectionManager(config)
-        assert manager.scanner is None
+        before = manager.scanner
         await manager.start()
-        assert manager.scanner is scanner
+        during = manager.scanner
         await manager.stop()
+        after = manager.scanner
 
-    assert manager.scanner is None
+    assert (before, during, after) == (None, scanner, None)
 
 
 @pytest.mark.asyncio
