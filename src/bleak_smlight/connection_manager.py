@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
@@ -51,7 +50,6 @@ class SMLIGHTConnectionManager:
         self._mode = config.get("mode")
         self._client: BleProxyClient | None = None
         self._scanner: SMLIGHTScanner | None = None
-        self._mode_task: asyncio.Task[None] | None = None
         self._unregister_scanner: Callable[[], None] | None = None
         self._unsetup_scanner: Callable[[], None] | None = None
 
@@ -77,10 +75,10 @@ class SMLIGHTConnectionManager:
         background reconnect task.
 
         A configured ``mode`` is seeded on the scanner before it is
-        registered (habluetooth binds the auto-scan scheduler there). The
-        matching firmware command is handed to a background task, because
-        the proxy has not answered the client's handshake yet when
-        ``start()`` returns; ``start()`` itself stays non-blocking.
+        registered (habluetooth binds the auto-scan scheduler there) and
+        then pinned through :meth:`SMLIGHTScanner.async_set_scanning_mode`,
+        which owns the deferral until the proxy answers the client's
+        handshake. ``start()`` itself stays non-blocking.
 
         Raises:
             RuntimeError: if :meth:`start` has already been called.
@@ -101,50 +99,20 @@ class SMLIGHTConnectionManager:
         self._client = data.client
         await self._client.start()
         if self._mode is not None:
-            self._mode_task = asyncio.create_task(
-                self._push_mode(scanner, data.client, self._mode)
-            )
-
-    async def _push_mode(
-        self,
-        scanner: SMLIGHTScanner,
-        client: BleProxyClient,
-        mode: BluetoothScanningMode,
-    ) -> None:
-        """
-        Pin ``mode`` once the proxy has answered the client's handshake.
-
-        ``BleProxyClient.start()`` only schedules its connect loop, so the
-        UDP endpoint does not exist yet when it returns — and
-        ``set_scan_mode`` is a silent no-op while ``transport`` is
-        ``None``. Setting the mode inline would therefore pin it locally
-        and never reach the firmware.
-
-        Waiting for ``transport`` alone is not enough either: it is
-        assigned as soon as the local datagram socket is bound, which
-        happens without contacting the device. The PING/ACK round trip
-        that follows is what proves the proxy is reachable, and a
-        handshake that times out closes that transport and retries with
-        a growing backoff. A mode pushed in the gap goes to a socket
-        with nothing on the far end, is never acknowledged and never
-        re-sent, so the scanner reports one mode while the firmware
-        stays on another. Waiting on the connected event instead pushes
-        on a transport that has demonstrably reached the device.
-
-        ``pysmlight`` exposes no public "connected" signal, so this
-        reads its event directly; the attribute is stable across the
-        supported 0.5.x range. Cancelled by :meth:`stop`.
-        """
-        await client._connected_evt.wait()
-        scanner.async_set_scanning_mode(mode)
+            # The scanner defers this until the proxy's PING/ACK and stands
+            # down if the auto-scan scheduler opened a window in the
+            # meantime. Waiting on the handshake here instead would push
+            # past that guard and drop the firmware out of a window the
+            # scanner still reports as ACTIVE.
+            scanner.async_set_scanning_mode(self._mode)
 
     async def stop(self) -> None:
         """
         Stop the BLE proxy client and unregister the scanner.
 
-        A pending mode push is cancelled first, so a manager stopped
-        before the proxy ever answered leaves no task waiting on a
-        handshake that will never complete.
+        Unsetting up the scanner cancels a mode push still waiting on the
+        handshake, so a manager stopped before the proxy ever answered
+        leaves no task waiting on an event that will never be set.
 
         Every teardown step runs even if an earlier one raises, so a
         failure stopping the client cannot leave the scanner registered
@@ -156,9 +124,6 @@ class SMLIGHTConnectionManager:
         """
         client, self._client = self._client, None
         self._scanner = None
-        mode_task, self._mode_task = self._mode_task, None
-        if mode_task is not None:
-            mode_task.cancel()
         unregister, self._unregister_scanner = self._unregister_scanner, None
         unsetup, self._unsetup_scanner = self._unsetup_scanner, None
         try:
