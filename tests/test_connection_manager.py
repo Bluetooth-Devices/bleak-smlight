@@ -6,6 +6,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from habluetooth import BluetoothScanningMode
 
 from bleak_smlight.connection_manager import (
     SMLIGHTConnectionManager,
@@ -63,14 +64,58 @@ async def test_start_registers_scanner_and_starts_client(
         await manager.start()
 
     connect_scanner_mock.assert_called_once_with(
-        "AA:BB:CC:DD:EE:FF", "slzb-proxy", "10.0.0.5", 5050
+        "AA:BB:CC:DD:EE:FF", "slzb-proxy", "10.0.0.5", 5050, None
     )
     scanner.async_setup.assert_called_once_with()
     ha_manager.async_register_scanner.assert_called_once_with(scanner)
     client.start.assert_awaited_once_with()
+    scanner.async_set_scanning_mode.assert_not_called()
     assert manager._client is client
     assert manager._unregister_scanner is unregister
     assert manager._unsetup_scanner is unsetup
+
+
+@pytest.mark.asyncio
+async def test_start_applies_configured_mode(config: SMLIGHTDeviceConfig) -> None:
+    """
+    A configured mode is seeded before registration and pushed after start.
+
+    habluetooth binds the auto-scan scheduler when the scanner registers and
+    only for a scanner already reporting AUTO, so the mode has to reach
+    ``connect_scanner``; the firmware command needs a running proxy client,
+    so it is pushed after ``client.start()``.
+    """
+    scanner = Mock()
+    scanner.async_setup = Mock(return_value=Mock())
+    client = Mock()
+    client.start = AsyncMock()
+    data = Mock(scanner=scanner, client=client)
+    ha_manager = Mock()
+    calls: list[str] = []
+    ha_manager.async_register_scanner = Mock(
+        side_effect=lambda _scanner: calls.append("register") or Mock()
+    )
+    client.start = AsyncMock(side_effect=lambda: calls.append("client_start"))
+    scanner.async_set_scanning_mode = Mock(
+        side_effect=lambda _mode: calls.append("set")
+    )
+
+    with (
+        patch(
+            "bleak_smlight.connection_manager.connect_scanner", return_value=data
+        ) as connect_scanner_mock,
+        patch("bleak_smlight.connection_manager.get_manager", return_value=ha_manager),
+    ):
+        manager = SMLIGHTConnectionManager(
+            {**config, "mode": BluetoothScanningMode.AUTO}
+        )
+        await manager.start()
+
+    connect_scanner_mock.assert_called_once_with(
+        "AA:BB:CC:DD:EE:FF", "slzb-proxy", "10.0.0.5", 5050, BluetoothScanningMode.AUTO
+    )
+    scanner.async_set_scanning_mode.assert_called_once_with(BluetoothScanningMode.AUTO)
+    assert calls == ["register", "client_start", "set"]
 
 
 @pytest.mark.asyncio

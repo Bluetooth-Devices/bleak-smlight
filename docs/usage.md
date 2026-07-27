@@ -76,6 +76,7 @@ Each proxy is described by a `SMLIGHTDeviceConfig`:
 | `name`   | yes      | Human-friendly adapter name shown by `habluetooth`.                      |
 | `host`   | yes      | IP or hostname the UDP proxy server listens on.                          |
 | `port`   | no       | UDP port of the proxy server; defaults to `SLZB_BLE_SERVER_PORT` (5050). |
+| `mode`   | no       | `BluetoothScanningMode` to run in; defaults to the firmware's own mode.   |
 
 `SMLIGHTConnectionManager.start()` returns once the scanner is registered and the
 proxy client has been started; it does not block waiting for the device to
@@ -85,16 +86,21 @@ background. Call `start()` once per manager instance; a second call raises
 
 ## Scanning modes
 
-The proxy starts on its firmware default. To pin a mode, reach the scanner
-through `manager.scanner` — it is the registered `SMLIGHTScanner` between
-`start()` and `stop()`, and `None` outside that window:
+Without a `mode`, the proxy stays on its firmware default. Set one in the
+config and `start()` applies it:
 
 ```python
 from habluetooth import BluetoothScanningMode
 
+manager = SMLIGHTConnectionManager(
+    {
+        "source": "AA:BB:CC:DD:EE:FF",
+        "name": "slzb-06",
+        "host": "10.0.0.42",
+        "mode": BluetoothScanningMode.AUTO,
+    }
+)
 await manager.start()
-assert manager.scanner is not None
-manager.scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
 ```
 
 - `PASSIVE` — listen only; the proxy never sends scan requests.
@@ -102,6 +108,20 @@ manager.scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
 - `AUTO` — the firmware stays passive, and `habluetooth`'s scheduler asks for
   short active windows on demand via `async_request_active_window()`. The
   firmware returns to passive when a window times out.
+
+**`AUTO` only works from the config.** `habluetooth` binds a scanner to its
+auto-scan scheduler when the scanner is registered, and only if the scanner
+already reports `AUTO` at that moment. Selecting `AUTO` later pins the mode
+locally but no active window is ever requested.
+
+To repin `PASSIVE`/`ACTIVE` while running, reach the scanner through
+`manager.scanner` — the registered `SMLIGHTScanner` between `start()` and
+`stop()`, and `None` outside that window:
+
+```python
+assert manager.scanner is not None
+manager.scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+```
 
 Modes are tracked locally: the SLZB firmware acknowledges configuration
 commands but does not push mode updates back, so the scanner reports the mode
@@ -114,9 +134,11 @@ registers it with `habluetooth`, starts the proxy client, and tears everything
 down on `stop()`. Reach for `connect_scanner` only when you want to own the
 scanner registration and proxy-client lifecycle yourself.
 
-`connect_scanner(source, name, host, port=SLZB_BLE_SERVER_PORT)` builds a
-`SMLIGHTScanner` plus a `pysmlight.BleProxyClient` wired to its advertisement
-callback, and returns a `SMLIGHTClientData`. It leaves three jobs to the caller:
+`connect_scanner(source, name, host, port=SLZB_BLE_SERVER_PORT, mode=None)`
+builds a `SMLIGHTScanner` plus a `pysmlight.BleProxyClient` wired to its
+advertisement callback, and returns a `SMLIGHTClientData`. `mode` seeds the
+scanner's requested mode — pass `AUTO` here if you want the scheduler, since
+it is bound when you register the scanner. It leaves three jobs to the caller:
 
 1. Call `data.scanner.async_setup()` to attach the scanner to the running loop.
 2. Register the scanner with the host-side Bluetooth manager (and unregister it

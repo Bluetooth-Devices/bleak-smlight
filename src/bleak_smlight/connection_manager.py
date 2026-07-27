@@ -12,6 +12,7 @@ from .connect import SLZB_BLE_SERVER_PORT, connect_scanner
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from habluetooth import BluetoothScanningMode
     from pysmlight import BleProxyClient
 
     from .backend.scanner import SMLIGHTScanner
@@ -26,6 +27,7 @@ class SMLIGHTDeviceConfig(TypedDict):
     name: str
     host: str
     port: NotRequired[int]
+    mode: NotRequired[BluetoothScanningMode]
 
 
 class SMLIGHTConnectionManager:
@@ -45,6 +47,7 @@ class SMLIGHTConnectionManager:
         self._name = config["name"]
         self._host = config["host"]
         self._port = config.get("port", SLZB_BLE_SERVER_PORT)
+        self._mode = config.get("mode")
         self._client: BleProxyClient | None = None
         self._scanner: SMLIGHTScanner | None = None
         self._unregister_scanner: Callable[[], None] | None = None
@@ -56,9 +59,10 @@ class SMLIGHTConnectionManager:
         The registered scanner, or ``None`` before ``start()`` / after ``stop()``.
 
         This is the handle for scan-mode control — the scanner owns
-        ``async_set_scanning_mode`` (pin PASSIVE/ACTIVE, or AUTO to let
-        habluetooth's scheduler request active windows on demand). Without
-        it the proxy stays on its firmware default.
+        ``async_set_scanning_mode``, which repins PASSIVE/ACTIVE at
+        runtime. Switching to ``AUTO`` here only pins it locally: the
+        scheduler that drives active windows is bound at registration
+        time, so ``AUTO`` belongs in the config's ``mode``.
         """
         return self._scanner
 
@@ -70,6 +74,10 @@ class SMLIGHTConnectionManager:
         ``RuntimeError`` rather than leaking the prior proxy client and its
         background reconnect task.
 
+        A configured ``mode`` is seeded on the scanner before it is
+        registered (habluetooth binds the auto-scan scheduler there) and
+        pushed to the firmware once the proxy client is running.
+
         Raises:
             RuntimeError: if :meth:`start` has already been called.
 
@@ -79,13 +87,17 @@ class SMLIGHTConnectionManager:
                 "SMLIGHTConnectionManager.start() has already been called; "
                 "create a new manager instance to reconnect."
             )
-        data = connect_scanner(self._source, self._name, self._host, self._port)
+        data = connect_scanner(
+            self._source, self._name, self._host, self._port, self._mode
+        )
         scanner = data.scanner
         self._unsetup_scanner = scanner.async_setup()
         self._unregister_scanner = get_manager().async_register_scanner(scanner)
         self._scanner = scanner
         self._client = data.client
         await self._client.start()
+        if self._mode is not None:
+            scanner.async_set_scanning_mode(self._mode)
 
     async def stop(self) -> None:
         """
