@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -113,12 +114,82 @@ async def test_start_applies_configured_mode(config: SMLIGHTDeviceConfig) -> Non
             {**config, "mode": BluetoothScanningMode.AUTO}
         )
         await manager.start()
+        assert manager._mode_task is not None
+        await manager._mode_task
 
     connect_scanner_mock.assert_called_once_with(
         "AA:BB:CC:DD:EE:FF", "slzb-proxy", "10.0.0.5", 5050, BluetoothScanningMode.AUTO
     )
     scanner.async_set_scanning_mode.assert_called_once_with(BluetoothScanningMode.AUTO)
     assert calls == ["register", "client_start", "set"]
+
+
+@pytest.mark.asyncio
+async def test_mode_push_waits_for_the_proxy_transport(
+    config: SMLIGHTDeviceConfig,
+) -> None:
+    """
+    The firmware command is withheld until the proxy client has a transport.
+
+    ``BleProxyClient.start()`` only schedules its connect loop, and
+    ``set_scan_mode`` is a silent no-op while ``transport`` is ``None``, so
+    pushing the mode inline would pin it locally and never reach the proxy.
+    """
+    scanner = Mock()
+    scanner.async_setup = Mock(return_value=Mock())
+    client = Mock()
+    client.start = AsyncMock()
+    client.transport = None
+    data = Mock(scanner=scanner, client=client)
+
+    with (
+        patch("bleak_smlight.connection_manager.connect_scanner", return_value=data),
+        patch("bleak_smlight.connection_manager.get_manager", return_value=MagicMock()),
+        patch("bleak_smlight.connection_manager._TRANSPORT_POLL_INTERVAL", 0),
+    ):
+        manager = SMLIGHTConnectionManager(
+            {**config, "mode": BluetoothScanningMode.ACTIVE}
+        )
+        await manager.start()
+        await asyncio.sleep(0)
+        scanner.async_set_scanning_mode.assert_not_called()
+
+        client.transport = Mock()
+        assert manager._mode_task is not None
+        await manager._mode_task
+
+    scanner.async_set_scanning_mode.assert_called_once_with(
+        BluetoothScanningMode.ACTIVE
+    )
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_a_pending_mode_push(config: SMLIGHTDeviceConfig) -> None:
+    """A manager stopped before the proxy answers leaves no waiting task."""
+    scanner = Mock()
+    scanner.async_setup = Mock(return_value=Mock())
+    client = Mock()
+    client.start = AsyncMock()
+    client.transport = None
+    data = Mock(scanner=scanner, client=client)
+
+    with (
+        patch("bleak_smlight.connection_manager.connect_scanner", return_value=data),
+        patch("bleak_smlight.connection_manager.get_manager", return_value=MagicMock()),
+        patch("bleak_smlight.connection_manager._TRANSPORT_POLL_INTERVAL", 0),
+    ):
+        manager = SMLIGHTConnectionManager(
+            {**config, "mode": BluetoothScanningMode.PASSIVE}
+        )
+        await manager.start()
+        task = manager._mode_task
+        assert task is not None
+        await manager.stop()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    scanner.async_set_scanning_mode.assert_not_called()
+    assert cast(object, manager._mode_task) is None
 
 
 @pytest.mark.asyncio

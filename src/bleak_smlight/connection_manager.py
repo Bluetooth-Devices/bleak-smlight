@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
@@ -18,6 +19,11 @@ if TYPE_CHECKING:
     from .backend.scanner import SMLIGHTScanner
 
 _LOGGER = logging.getLogger(__name__)
+
+# How often to re-check for the proxy client's UDP transport before
+# pushing the configured mode. The connect loop creates the endpoint on
+# its first pass, so this normally resolves on the first tick.
+_TRANSPORT_POLL_INTERVAL = 0.1
 
 
 class SMLIGHTDeviceConfig(TypedDict):
@@ -50,6 +56,7 @@ class SMLIGHTConnectionManager:
         self._mode = config.get("mode")
         self._client: BleProxyClient | None = None
         self._scanner: SMLIGHTScanner | None = None
+        self._mode_task: asyncio.Task[None] | None = None
         self._unregister_scanner: Callable[[], None] | None = None
         self._unsetup_scanner: Callable[[], None] | None = None
 
@@ -75,8 +82,10 @@ class SMLIGHTConnectionManager:
         background reconnect task.
 
         A configured ``mode`` is seeded on the scanner before it is
-        registered (habluetooth binds the auto-scan scheduler there) and
-        pushed to the firmware once the proxy client is running.
+        registered (habluetooth binds the auto-scan scheduler there). The
+        matching firmware command is handed to a background task, because
+        the proxy client has no transport to send it on yet when
+        ``start()`` returns; ``start()`` itself stays non-blocking.
 
         Raises:
             RuntimeError: if :meth:`start` has already been called.
@@ -97,11 +106,36 @@ class SMLIGHTConnectionManager:
         self._client = data.client
         await self._client.start()
         if self._mode is not None:
-            scanner.async_set_scanning_mode(self._mode)
+            self._mode_task = asyncio.create_task(
+                self._push_mode(scanner, data.client, self._mode)
+            )
+
+    async def _push_mode(
+        self,
+        scanner: SMLIGHTScanner,
+        client: BleProxyClient,
+        mode: BluetoothScanningMode,
+    ) -> None:
+        """
+        Pin ``mode`` once the proxy client has a transport to send it on.
+
+        ``BleProxyClient.start()`` only schedules its connect loop, so the
+        UDP endpoint does not exist yet when it returns — and
+        ``set_scan_mode`` is a silent no-op while ``transport`` is
+        ``None``. Setting the mode inline would therefore pin it locally
+        and never reach the firmware. Cancelled by :meth:`stop`.
+        """
+        while client.transport is None:
+            await asyncio.sleep(_TRANSPORT_POLL_INTERVAL)
+        scanner.async_set_scanning_mode(mode)
 
     async def stop(self) -> None:
         """
         Stop the BLE proxy client and unregister the scanner.
+
+        A pending mode push is cancelled first, so a manager stopped
+        before the proxy ever answered leaves no task waiting on a
+        transport that will never appear.
 
         Every teardown step runs even if an earlier one raises, so a
         failure stopping the client cannot leave the scanner registered
@@ -113,6 +147,9 @@ class SMLIGHTConnectionManager:
         """
         client, self._client = self._client, None
         self._scanner = None
+        mode_task, self._mode_task = self._mode_task, None
+        if mode_task is not None:
+            mode_task.cancel()
         unregister, self._unregister_scanner = self._unregister_scanner, None
         unsetup, self._unsetup_scanner = self._unsetup_scanner, None
         try:

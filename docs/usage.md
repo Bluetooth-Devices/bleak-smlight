@@ -127,6 +127,13 @@ Modes are tracked locally: the SLZB firmware acknowledges configuration
 commands but does not push mode updates back, so the scanner reports the mode
 this library last asked for.
 
+The configured `mode` is sent to the firmware in the background rather than by
+`start()` itself, which keeps `start()` non-blocking: the proxy client only
+schedules its connect loop, so it has no socket to send on until that loop has
+run. Repinning through `manager.scanner` sends immediately and is dropped if
+the proxy is unreachable — the local pin still stands, so re-issue it if the
+device was down.
+
 ## Advanced: wiring `connect_scanner` directly
 
 `SMLIGHTConnectionManager` is the recommended entry point: it builds the scanner,
