@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from habluetooth import BluetoothScanningMode
 from pysmlight import BleProxyClient
 
 from bleak_smlight.backend.scanner import SMLIGHTScanner
@@ -39,3 +40,21 @@ def test_connect_scanner_wires_callback_to_scanner() -> None:
     """The proxy client's callback is the scanner's raw-advert handler."""
     data = connect_scanner(SOURCE, NAME, HOST)
     assert data.client.callback == data.scanner._handle_raw_advertisement
+
+
+def test_connect_scanner_defaults_to_no_requested_mode() -> None:
+    """Without a mode the scanner is left on the firmware's own mode."""
+    data = connect_scanner(SOURCE, NAME, HOST)
+    assert data.scanner.requested_mode is None
+
+
+def test_connect_scanner_seeds_requested_mode() -> None:
+    """
+    ``mode`` lands on the scanner before registration.
+
+    habluetooth binds its auto-scan scheduler at registration time and only
+    for a scanner already reporting AUTO, so seeding here is what makes
+    on-demand active windows reachable at all.
+    """
+    data = connect_scanner(SOURCE, NAME, HOST, mode=BluetoothScanningMode.AUTO)
+    assert data.scanner.requested_mode is BluetoothScanningMode.AUTO

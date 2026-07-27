@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
@@ -41,6 +41,14 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         self._client: BleProxyClient | None = None
         self._intent: BluetoothScanningMode | None = None
         self._active_window_lock = asyncio.Lock()
+        self._pending_mode_push: asyncio.Task[None] | None = None
+
+    def _unsetup(self) -> None:
+        """Tear down; drop a mode push still waiting on the handshake."""
+        if (task := self._pending_mode_push) is not None:
+            self._pending_mode_push = None
+            task.cancel()
+        super()._unsetup()
 
     def set_client(self, client: BleProxyClient) -> None:
         """
@@ -65,6 +73,15 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         integration currently ignores them as they may be ambiguous. Therefore,
         the local scanner tracks and pins the requested/current modes entirely
         locally based on the integration's intent.
+
+        The firmware command is deferred while the proxy client has not
+        completed its PING/ACK handshake. ``BleProxyClient.start()`` only
+        schedules its connect loop, so a mode set right after it returns
+        would hit ``set_scan_mode``'s ``if self.transport:`` guard — which
+        has no ``else`` — and be dropped without raising. The scanner
+        would then report a mode the radio was never told about. The
+        deferred push re-reads :attr:`_intent`, so the most recent pin
+        wins and repeated calls before the handshake collapse into one.
         """
         self._intent = mode
         self.set_requested_mode(mode)
@@ -79,6 +96,40 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
             )
             return
 
+        # ``transport`` alone is not proof of reachability: it is assigned
+        # from a local socket bind that never contacts the device. The ACK
+        # that sets this event is. ``pysmlight`` exposes no public
+        # "connected" signal; the event is stable across the supported
+        # 0.5.x range.
+        if not client._connected_evt.is_set():
+            if self._pending_mode_push is None:
+                _LOGGER.debug(
+                    "%s: proxy handshake pending; deferring scan mode %s",
+                    self.name,
+                    mode.name,
+                )
+                self._pending_mode_push = asyncio.create_task(
+                    self._async_push_mode_when_connected(client)
+                )
+            return
+
+        self._push_mode(client, mode)
+
+    async def _async_push_mode_when_connected(self, client: BleProxyClient) -> None:
+        """Send the pinned intent once the proxy has answered the ping."""
+        try:
+            await client._connected_evt.wait()
+        finally:
+            self._pending_mode_push = None
+        # ``async_set_scanning_mode`` pins ``_intent`` before it ever
+        # creates this task, and nothing clears it, so the latest pin is
+        # always available here.
+        if TYPE_CHECKING:
+            assert self._intent is not None
+        self._push_mode(client, self._intent)
+
+    def _push_mode(self, client: BleProxyClient, mode: BluetoothScanningMode) -> None:
+        """Send ``mode`` to the firmware; failures are logged, not raised."""
         firmware_mode = _HA_TO_FIRMWARE_MODE.get(
             mode, BleProxyMode.BLE_PROXY_MODE_PASSIVE
         )

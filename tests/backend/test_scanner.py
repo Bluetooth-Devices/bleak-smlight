@@ -22,6 +22,20 @@ DEVICE_MAC = "EC:81:CC:F5:75:0C"
 DEVICE_MAC_BYTES = b"\x0c\x75\xf5\xcc\x81\xec"
 
 
+def _connected_client() -> MagicMock:
+    """A proxy client mock whose PING/ACK handshake has completed."""
+    client = _pending_client()
+    client._connected_evt.set()
+    return client
+
+
+def _pending_client() -> MagicMock:
+    """A proxy client mock that has not yet been answered by the proxy."""
+    client = MagicMock(spec=BleProxyClient)
+    client._connected_evt = asyncio.Event()
+    return client
+
+
 def test_scanner_is_remote_and_non_connectable(scanner: SMLIGHTScanner) -> None:
     """The scanner is a non-connectable remote scanner."""
     assert isinstance(scanner, BaseHaRemoteScanner)
@@ -79,7 +93,7 @@ def test_set_scanning_mode(
     expected_firmware_mode: BleProxyMode,
 ) -> None:
     """Test updating scanning mode tells the client and updates state."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     scanner.set_client(client)
 
     scanner.async_set_scanning_mode(scanning_mode)
@@ -98,7 +112,7 @@ def test_set_scanning_mode_no_client(scanner: SMLIGHTScanner) -> None:
 @pytest.mark.asyncio
 async def test_async_request_active_window(scanner: SMLIGHTScanner) -> None:
     """Test requesting active scan window."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     scanner.set_client(client)
     scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
     client.reset_mock()
@@ -113,7 +127,7 @@ async def test_async_request_active_window(scanner: SMLIGHTScanner) -> None:
 @pytest.mark.asyncio
 async def test_async_request_active_window_clamping(scanner: SMLIGHTScanner) -> None:
     """Test active window duration clamping to 65535 ms."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     scanner.set_client(client)
 
     with patch("asyncio.sleep") as mock_sleep:
@@ -127,7 +141,7 @@ async def test_async_request_active_window_clamping(scanner: SMLIGHTScanner) -> 
 @pytest.mark.asyncio
 async def test_async_request_active_window_invalid(scanner: SMLIGHTScanner) -> None:
     """Test active window requests with invalid parameters."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     scanner.set_client(client)
 
     assert await scanner.async_request_active_window(-1.0) is False
@@ -146,7 +160,7 @@ async def test_async_request_active_window_no_client(scanner: SMLIGHTScanner) ->
 @pytest.mark.asyncio
 async def test_async_request_active_window_locked(scanner: SMLIGHTScanner) -> None:
     """Test concurrent active window requests are rejected."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     scanner.set_client(client)
 
     async def run_request() -> bool:
@@ -167,7 +181,7 @@ async def test_async_request_active_window_restore_failure(
     scanner: SMLIGHTScanner,
 ) -> None:
     """Test exception handling during scan mode restore."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     client.set_scan_mode.side_effect = RuntimeError("Failed to restore")
     scanner.set_client(client)
 
@@ -179,7 +193,7 @@ async def test_async_request_active_window_restore_failure(
 
 def test_async_set_scanning_mode_error(scanner: SMLIGHTScanner) -> None:
     """Test exception handling in async_set_scanning_mode."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     client.set_scan_mode.side_effect = RuntimeError("Failed to set scan mode")
     scanner.set_client(client)
 
@@ -191,7 +205,7 @@ def test_async_set_scanning_mode_error(scanner: SMLIGHTScanner) -> None:
 @pytest.mark.asyncio
 async def test_async_request_active_window_error(scanner: SMLIGHTScanner) -> None:
     """Test exception handling when set_active_window fails."""
-    client = MagicMock(spec=BleProxyClient)
+    client = _connected_client()
     client.set_active_window.side_effect = RuntimeError(
         "Failed to request active window"
     )
@@ -200,3 +214,80 @@ async def test_async_request_active_window_error(scanner: SMLIGHTScanner) -> Non
     success = await scanner.async_request_active_window(0.01)
     assert success is False
     client.set_active_window.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_set_scanning_mode_defers_until_handshake(
+    scanner: SMLIGHTScanner,
+) -> None:
+    """
+    A mode set before the proxy answers is sent after the handshake.
+
+    ``BleProxyClient.start()`` only schedules its connect loop, so
+    ``set_scan_mode`` would hit its ``if self.transport:`` guard and
+    drop the packet without raising.
+    """
+    client = _pending_client()
+    scanner.set_client(client)
+
+    scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    await asyncio.sleep(0)
+    client.set_scan_mode.assert_not_called()
+    assert scanner.requested_mode is BluetoothScanningMode.ACTIVE
+
+    client._connected_evt.set()
+    await asyncio.sleep(0)
+    client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_ACTIVE)
+
+
+@pytest.mark.asyncio
+async def test_deferred_mode_push_sends_only_the_latest_intent(
+    scanner: SMLIGHTScanner,
+) -> None:
+    """Repins before the handshake collapse into one push of the last one."""
+    client = _pending_client()
+    scanner.set_client(client)
+
+    scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
+
+    client._connected_evt.set()
+    await asyncio.sleep(0)
+    client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_PASSIVE)
+
+
+@pytest.mark.asyncio
+async def test_set_scanning_mode_after_handshake_is_immediate(
+    scanner: SMLIGHTScanner,
+) -> None:
+    """Once connected the command goes out synchronously, with no task."""
+    client = _connected_client()
+    scanner.set_client(client)
+
+    unsetup = scanner.async_setup()
+
+    scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
+    client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_PASSIVE)
+    assert scanner._pending_mode_push is None
+
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_unsetup_cancels_a_pending_mode_push(scanner: SMLIGHTScanner) -> None:
+    """Tearing the scanner down drops a push still waiting on the proxy."""
+    client = _pending_client()
+    scanner.set_client(client)
+    unsetup = scanner.async_setup()
+
+    scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    task = scanner._pending_mode_push
+    assert task is not None
+
+    unsetup()
+    assert scanner._pending_mode_push is None
+
+    client._connected_evt.set()
+    await asyncio.sleep(0)
+    assert task.cancelled()
+    client.set_scan_mode.assert_not_called()
