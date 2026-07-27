@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
@@ -121,8 +121,12 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
             await client._connected_evt.wait()
         finally:
             self._pending_mode_push = None
-        if (intent := self._intent) is not None:
-            self._push_mode(client, intent)
+        # ``async_set_scanning_mode`` pins ``_intent`` before it ever
+        # creates this task, and nothing clears it, so the latest pin is
+        # always available here.
+        if TYPE_CHECKING:
+            assert self._intent is not None
+        self._push_mode(client, self._intent)
 
     def _push_mode(self, client: BleProxyClient, mode: BluetoothScanningMode) -> None:
         """Send ``mode`` to the firmware; failures are logged, not raised."""
