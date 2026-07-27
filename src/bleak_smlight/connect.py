@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from pysmlight import BleProxyClient
 
 from .backend.scanner import SMLIGHTScanner
+
+if TYPE_CHECKING:
+    from habluetooth import BluetoothScanningMode
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +32,7 @@ def connect_scanner(
     name: str,
     host: str,
     port: int = SLZB_BLE_SERVER_PORT,
+    mode: BluetoothScanningMode | None = None,
 ) -> SMLIGHTClientData:
     """
     Build a scanner and BLE proxy client for an SLZB device.
@@ -35,6 +40,12 @@ def connect_scanner(
     ``source`` is the stable unique identifier for the proxy (typically
     its MAC address); ``name`` is the human-friendly adapter name;
     ``host`` is the IP/hostname the UDP proxy server listens on.
+
+    ``mode`` seeds the scanner's ``requested_mode``. habluetooth only
+    spawns an auto-scan worker for a scanner that already reports
+    ``AUTO`` when it is registered, so ``AUTO`` must be passed here —
+    setting it later via ``async_set_scanning_mode`` pins the mode
+    locally but never gets the scheduler to request active windows.
 
     The caller is responsible for:
 
@@ -48,7 +59,7 @@ def connect_scanner(
     standalone case.
     """
     _LOGGER.debug("%s [%s]: Connecting scanner to %s:%s", name, source, host, port)
-    scanner = SMLIGHTScanner(source, name, None, False)
+    scanner = SMLIGHTScanner(source, name, None, False, requested_mode=mode)
     client = BleProxyClient(
         esp32_ip=host,
         callback=scanner._handle_raw_advertisement,

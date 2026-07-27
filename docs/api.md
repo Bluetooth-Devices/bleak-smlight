@@ -28,6 +28,19 @@ client and scanner registration for you.
    :undoc-members:
 ```
 
+## Scanner
+
+`SMLIGHTScanner` is the `habluetooth` remote scanner fed by the proxy. You do
+not construct it — `SMLIGHTConnectionManager` and `connect_scanner` do — but it
+is the handle for runtime scan-mode control, reached via `manager.scanner` or
+`SMLIGHTClientData.scanner`. See the "Scanning modes" section of
+[usage](usage.md) for why `AUTO` has to come from the device config instead.
+
+```{eval-rst}
+.. autoclass:: bleak_smlight.SMLIGHTScanner
+   :members: set_client, async_set_scanning_mode, async_request_active_window
+```
+
 ## Low-level escape hatch
 
 `connect_scanner` is for advanced callers that manage their own scanner
