@@ -169,6 +169,46 @@ async def test_mode_push_waits_for_the_proxy_handshake(
 
 
 @pytest.mark.asyncio
+async def test_configured_mode_stands_down_for_an_in_flight_window(
+    config: SMLIGHTDeviceConfig,
+) -> None:
+    """
+    A window opened on the same ACK keeps the radio; the mode push stands down.
+
+    The auto-scan scheduler and the deferred mode push both wake on the
+    proxy's handshake. If the scheduler wins, sending the configured mode
+    would drop the firmware out of a window the scanner still reports as
+    ACTIVE for its full duration, and every device in that window goes
+    unscanned. Routing the manager's mode through the scanner is what puts
+    it behind that guard.
+    """
+    scanner, client = _real_scanner(BluetoothScanningMode.AUTO)
+    data = Mock(scanner=scanner, client=client)
+
+    with (
+        patch("bleak_smlight.connection_manager.connect_scanner", return_value=data),
+        patch("bleak_smlight.connection_manager.get_manager", return_value=MagicMock()),
+    ):
+        manager = SMLIGHTConnectionManager(
+            {**config, "mode": BluetoothScanningMode.AUTO}
+        )
+        await manager.start()
+        # Let the deferred push suspend on the handshake before the
+        # scheduler's window is queued, so the window runs first.
+        await asyncio.sleep(0)
+        window = asyncio.create_task(scanner.async_request_active_window(30))
+        client._connected_evt.set()
+        await asyncio.sleep(0)
+
+        client.set_active_window.assert_called_once_with(30000)
+        assert scanner.current_mode is BluetoothScanningMode.ACTIVE
+        client.set_scan_mode.assert_not_called()
+
+        window.cancel()
+        await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_stop_cancels_a_pending_mode_push(config: SMLIGHTDeviceConfig) -> None:
     """A manager stopped before the proxy answers leaves no waiting task."""
     scanner, client = _real_scanner(BluetoothScanningMode.PASSIVE)
