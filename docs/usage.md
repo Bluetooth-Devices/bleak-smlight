@@ -76,7 +76,7 @@ Each proxy is described by a `SMLIGHTDeviceConfig`:
 | `name`   | yes      | Human-friendly adapter name shown by `habluetooth`.                      |
 | `host`   | yes      | IP or hostname the UDP proxy server listens on.                          |
 | `port`   | no       | UDP port of the proxy server; defaults to `SLZB_BLE_SERVER_PORT` (5050). |
-| `mode`   | no       | `BluetoothScanningMode` to run in; defaults to the firmware's own mode.   |
+| `mode`   | no       | `BluetoothScanningMode` to run in; defaults to the firmware's own mode.  |
 
 `SMLIGHTConnectionManager.start()` returns once the scanner is registered and the
 proxy client has been started; it does not block waiting for the device to
