@@ -435,18 +435,22 @@ async def test_repin_during_a_live_window_stands_down(
     task = asyncio.create_task(auto_scanner.async_request_active_window(0.05))
     await asyncio.sleep(0)
     assert auto_scanner._window_end is not None
-    assert auto_scanner.current_mode is BluetoothScanningMode.ACTIVE
 
     # Same rule as the deferred handshake push: the radio is active for
     # the rest of the window, so pushing now would desync the reported
     # mode from the radio. The window's restore delivers this intent.
     auto_scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
     assert auto_scanner.requested_mode is BluetoothScanningMode.PASSIVE
-    assert auto_scanner.current_mode is BluetoothScanningMode.ACTIVE
+    # Read through locals so each assertion narrows on its own snapshot;
+    # asserting twice on the attribute would let mypy carry the first
+    # narrowing across the await and call the second one unreachable.
+    mid_window_mode = auto_scanner.current_mode
+    assert mid_window_mode is BluetoothScanningMode.ACTIVE
     client.set_scan_mode.assert_not_called()
 
     assert await task is True
-    assert auto_scanner.current_mode is BluetoothScanningMode.PASSIVE
+    restored_mode = auto_scanner.current_mode
+    assert restored_mode is BluetoothScanningMode.PASSIVE
     client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_PASSIVE)
 
 
