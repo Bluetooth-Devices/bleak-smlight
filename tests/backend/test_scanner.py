@@ -422,3 +422,53 @@ async def test_deferred_push_stands_down_for_a_window_opened_by_the_same_ack(
     assert await task is True
     # The window's own restore delivers the pinned intent — once.
     client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_PASSIVE)
+
+
+@pytest.mark.asyncio
+async def test_repin_during_a_live_window_stands_down(
+    auto_scanner: SMLIGHTScanner,
+) -> None:
+    """A repin must not drop the firmware out of a window in flight."""
+    client = _connected_client()
+    auto_scanner.set_client(client)
+
+    task = asyncio.create_task(auto_scanner.async_request_active_window(0.05))
+    await asyncio.sleep(0)
+    assert auto_scanner._window_end is not None
+    assert auto_scanner.current_mode is BluetoothScanningMode.ACTIVE
+
+    # Same rule as the deferred handshake push: the radio is active for
+    # the rest of the window, so pushing now would desync the reported
+    # mode from the radio. The window's restore delivers this intent.
+    auto_scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
+    assert auto_scanner.requested_mode is BluetoothScanningMode.PASSIVE
+    assert auto_scanner.current_mode is BluetoothScanningMode.ACTIVE
+    client.set_scan_mode.assert_not_called()
+
+    assert await task is True
+    assert auto_scanner.current_mode is BluetoothScanningMode.PASSIVE
+    client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_PASSIVE)
+
+
+@pytest.mark.asyncio
+async def test_repin_to_auto_mid_window_keeps_the_extend_path_honest(
+    auto_scanner: SMLIGHTScanner,
+) -> None:
+    """An extend answered True must not sit on a radio a repin sent passive."""
+    client = _connected_client()
+    auto_scanner.set_client(client)
+
+    task = asyncio.create_task(auto_scanner.async_request_active_window(0.2))
+    await asyncio.sleep(0)
+
+    # A repin to AUTO leaves requested_mode AUTO, so the scheduler keeps
+    # ticking and the next request takes the extend path. That path
+    # answers True without arming anything, so the window it reports has
+    # to still be open on the radio.
+    auto_scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+    assert await auto_scanner.async_request_active_window(0.05) is True
+    client.set_scan_mode.assert_not_called()
+    client.set_active_window.assert_called_once_with(200)
+
+    assert await task is True
+    client.set_scan_mode.assert_called_once_with(BleProxyMode.BLE_PROXY_MODE_PASSIVE)

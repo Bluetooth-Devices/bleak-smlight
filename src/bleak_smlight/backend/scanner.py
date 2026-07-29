@@ -107,9 +107,31 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         wins and repeated calls before the handshake collapse into one. It
         stands down if an active window opened in the meantime, leaving the
         window's restore to deliver the same mode.
+
+        A pin landing while an active window is in flight stands down the
+        same way: ``requested_mode`` updates at once — which stops the
+        scheduler asking for further windows — but ``current_mode`` keeps
+        reporting ACTIVE and no command is sent, because the radio really
+        is active until the window expires. The window's restore reads the
+        live :attr:`_intent`, so the pin lands there instead of being lost.
         """
         self._intent = mode
         self.set_requested_mode(mode)
+
+        # The radio is active for the rest of the window. Reporting ``mode``
+        # now, or pushing it, would desync the scanner from the radio for
+        # the window's remaining span — the same divergence the deferred
+        # push stands down to avoid, and it would leave the open-or-extend
+        # path answering ``True`` over a radio this push sent passive.
+        if self._window_end is not None:
+            _LOGGER.debug(
+                "%s: active window in flight; leaving scan mode %s to the "
+                "window's restore",
+                self.name,
+                mode.name,
+            )
+            return
+
         self.set_current_mode(mode)
 
         client = self._client

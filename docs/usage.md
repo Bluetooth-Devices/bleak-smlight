@@ -134,6 +134,12 @@ run. Repinning through `manager.scanner` sends immediately and is dropped if
 the proxy is unreachable — the local pin still stands, so re-issue it if the
 device was down.
 
+One exception: a repin landing while an `AUTO` active window is still open
+takes effect when that window expires, not immediately. The scheduler stops
+asking for new windows straight away, but the radio is genuinely active until
+the current window times out, so the scanner keeps reporting `ACTIVE` for the
+rest of it rather than claiming a mode the radio is not in.
+
 ## Advanced: wiring `connect_scanner` directly
 
 `SMLIGHTConnectionManager` is the recommended entry point: it builds the scanner,
