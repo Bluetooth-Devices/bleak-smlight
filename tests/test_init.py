@@ -8,8 +8,10 @@ from bleak_smlight import (
     SMLIGHTClientData,
     SMLIGHTConnectionManager,
     SMLIGHTDeviceConfig,
+    SMLIGHTScanner,
     connect_scanner,
 )
+from bleak_smlight.backend.scanner import SMLIGHTScanner as _SMLIGHTScanner_impl
 from bleak_smlight.connect import SLZB_BLE_SERVER_PORT as _PORT_impl
 from bleak_smlight.connect import SMLIGHTClientData as _SMLIGHTClientData_impl
 from bleak_smlight.connect import connect_scanner as _connect_scanner_impl
@@ -28,6 +30,7 @@ def test_public_all_matches_module_exports() -> None:
         "SMLIGHTClientData",
         "SMLIGHTConnectionManager",
         "SMLIGHTDeviceConfig",
+        "SMLIGHTScanner",
         "__version__",
         "connect_scanner",
     }
@@ -41,6 +44,7 @@ def test_public_reexports_resolve_to_canonical_objects() -> None:
     assert SMLIGHTClientData is _SMLIGHTClientData_impl
     assert SMLIGHTConnectionManager is _SMLIGHTConnectionManager_impl
     assert SMLIGHTDeviceConfig is _SMLIGHTDeviceConfig_impl
+    assert SMLIGHTScanner is _SMLIGHTScanner_impl
     assert SLZB_BLE_SERVER_PORT is _PORT_impl
 
 
