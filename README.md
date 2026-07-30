@@ -45,7 +45,10 @@ this library registers a non connectable scanner with
 [habluetooth](https://github.com/Bluetooth-Devices/habluetooth); it does not
 support GATT connections. The UDP proxy protocol lives in
 [pysmlight](https://github.com/smlight-tech/pysmlight), this library is the host
-side glue that feeds advertisements into Bleak. See the [architecture
+side glue that feeds advertisements into habluetooth's advertisement history.
+Because the scanner is non connectable, `bleak.BleakScanner` and
+`HaBleakScannerWrapper.discover()` will not return proxy devices — read them via
+`get_manager().async_discovered_service_info(False)`. See the [architecture
 docs](https://bleak-smlight.readthedocs.io/en/latest/architecture.html) for how
 the pieces fit together.
 
@@ -68,7 +71,12 @@ async def main() -> None:
     managers = [SMLIGHTConnectionManager(d) for d in DEVICES]
     await asyncio.gather(*(m.start() for m in managers))
     try:
-        await asyncio.Event().wait()  # advertisements now flow into Bleak
+        while True:  # advertisements now flow into habluetooth's history
+            await asyncio.sleep(5)
+            for info in habluetooth.get_manager().async_discovered_service_info(
+                False
+            ):
+                print(info.address, info.name, info.rssi)
     finally:
         await asyncio.gather(*(m.stop() for m in managers))
 

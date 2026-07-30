@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import bleak
 import habluetooth
 
 from bleak_smlight import SMLIGHTConnectionManager, SMLIGHTDeviceConfig
@@ -17,18 +16,28 @@ SMLIGHT_DEVICES: list[SMLIGHTDeviceConfig] = [
 ]
 
 
+class ProxyBluetoothManager(habluetooth.BluetoothManager):
+    """Receive every proxied advertisement as it arrives."""
+
+    def _discover_service_info(
+        self, service_info: habluetooth.BluetoothServiceInfoBleak
+    ) -> None:
+        print(service_info.address, service_info.name, service_info.rssi)
+
+
 async def example_app() -> None:
     """Example application here."""
     await asyncio.sleep(5)  # Give time for the scanner to find devices
 
-    # Use bleak normally here. The SLZB proxy is scan-only, so devices are
-    # discoverable but not connectable.
-    devices = await bleak.BleakScanner.discover(return_adv=True)
-    for d, a in devices.values():
+    # The SLZB proxy is scan-only, so its advertisements are registered as
+    # non-connectable. ``bleak.BleakScanner`` (local adapter) and
+    # ``HaBleakScannerWrapper.discover()`` (connectable history) both miss
+    # them; read the all-scanners history instead.
+    for info in habluetooth.get_manager().async_discovered_service_info(False):
         print()
-        print(d)
-        print("-" * len(str(d)))
-        print(a)
+        print(info.device)
+        print("-" * len(str(info.device)))
+        print(info.advertisement)
 
     # Wait forever
     await asyncio.Event().wait()
@@ -37,7 +46,7 @@ async def example_app() -> None:
 async def run() -> None:
     """Run the main application."""
     managers = [SMLIGHTConnectionManager(device) for device in SMLIGHT_DEVICES]
-    await habluetooth.BluetoothManager().async_setup()
+    await ProxyBluetoothManager().async_setup()
     try:
         # start() does not block on the device (the proxy client retries in
         # the background), so gather them concurrently and let any real

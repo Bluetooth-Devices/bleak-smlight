@@ -20,16 +20,15 @@ scanner and provides no Bleak _client_.
 
 The split is:
 
-| Layer                                            | Where it lives               | Repository                                                                        |
-| ------------------------------------------------ | ---------------------------- | --------------------------------------------------------------------------------- |
-| SLZB firmware (UDP BLE proxy server)             | On the SLZB-U device (ESP32) | SLZB-OS                                                                           |
-| Python UDP client for the proxy                  | Host (your app)              | [smlight-tech/pysmlight](https://github.com/smlight-tech/pysmlight)               |
-| `bleak`-compatible scanner on top of `pysmlight` | Host (your app)              | **this repo**                                                                     |
-| Remote-scanner bookkeeping primitives            | Host (your app)              | [Bluetooth-Devices/habluetooth](https://github.com/Bluetooth-Devices/habluetooth) |
-| Standard BLE scanner API consumed by user code   | Host (your app)              | [hbldh/bleak](https://github.com/hbldh/bleak)                                     |
+| Layer                                                       | Where it lives               | Repository                                                                        |
+| ----------------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------- |
+| SLZB firmware (UDP BLE proxy server)                        | On the SLZB-U device (ESP32) | SLZB-OS                                                                           |
+| Python UDP client for the proxy                             | Host (your app)              | [smlight-tech/pysmlight](https://github.com/smlight-tech/pysmlight)               |
+| Remote scanner on top of `pysmlight`                        | Host (your app)              | **this repo**                                                                     |
+| Remote-scanner primitives, advertisement history, read APIs | Host (your app)              | [Bluetooth-Devices/habluetooth](https://github.com/Bluetooth-Devices/habluetooth) |
 
-So when you call `bleak.BleakScanner.discover(...)` in an app that has set up a
-`SMLIGHTConnectionManager`, what really happens is:
+So when an app that has set up a `SMLIGHTConnectionManager` reads discovered
+devices, what really happens is:
 
 1. The SLZB device scans for BLE advertisements over the air.
 2. The proxy server forwards each advertisement to your host over Wi-Fi via UDP.
@@ -37,11 +36,28 @@ So when you call `bleak.BleakScanner.discover(...)` in an app that has set up a
    the device MAC, RSSI, address type, and raw advertisement bytes.
 4. `bleak-smlight`'s `SMLIGHTScanner._handle_raw_advertisement` forwards those
    values into `habluetooth`.
-5. `bleak`'s discovery code sees those advertisements as if they had been seen by
-   a local adapter.
+5. `habluetooth` records them in its all-scanners advertisement history, from
+   which the app reads them.
 
 There is no reverse path: the proxy cannot open GATT connections, so devices are
 discoverable but not connectable.
+
+## Non-connectable means bleak's own APIs do not see the proxy
+
+Because the scanner is registered non-connectable, proxied advertisements only
+ever enter `habluetooth`'s _all-scanners_ history — never its _connectable_
+history. Every bleak-shaped read path is gated on the connectable history
+(habluetooth's own comment: "Bleak callbacks must get a connectable device"), so
+neither `bleak.BleakScanner` (which talks to the local adapter and never
+consults `habluetooth` at all) nor `habluetooth.HaBleakScannerWrapper`'s
+`discover()` / `discovered_devices` / `detection_callback` will return a proxy
+device. They return an empty result rather than an error, which makes this easy
+to mistake for "the proxy is not working".
+
+The read paths that do see proxied advertisements are listed in
+{ref}`usage <usage>`. `tests/backend/test_scanner_wire.py` locks this behaviour,
+so if a future `habluetooth` release extends its bleak surface to
+non-connectable scanners, the suite fails and these docs get revisited.
 
 ## Where the proxy is implemented
 

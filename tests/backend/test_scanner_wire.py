@@ -15,7 +15,7 @@ correct.
 from __future__ import annotations
 
 import pytest
-from habluetooth import get_manager
+from habluetooth import HaBleakScannerWrapper, get_manager
 from pysmlight import BleProxyProtocol
 
 from bleak_smlight.backend.scanner import SMLIGHTScanner
@@ -111,3 +111,38 @@ def test_multiple_bundled_advertisements_in_one_datagram(
     assert service_info_2.address == mac_2
     assert service_info_2.rssi == -85
     assert service_info_2.source == PROXY_SOURCE
+
+
+def test_proxy_advertisements_stay_out_of_connectable_history(
+    scanner: SMLIGHTScanner,
+) -> None:
+    """A proxied advertisement enters the all-history but not the connectable one."""
+    _feed(scanner, _data_datagram(DEVICE_MAC, -72, 1))
+
+    manager = get_manager()
+    assert DEVICE_MAC in {
+        info.address for info in manager.async_discovered_service_info(False)
+    }
+    assert DEVICE_MAC not in {
+        info.address for info in manager.async_discovered_service_info(True)
+    }
+
+
+@pytest.mark.asyncio
+async def test_bleak_shaped_read_paths_cannot_see_the_proxy(
+    scanner: SMLIGHTScanner,
+) -> None:
+    """
+    Only the ``connectable=False`` read paths surface proxied advertisements.
+
+    ``HaBleakScannerWrapper``'s bleak-compatible surface reads the connectable
+    history, which a scan-only proxy never populates. The documented read path
+    is therefore ``async_discovered_service_info(False)`` (or the
+    ``find_device_by_*`` helpers, which fall back to the all-history). If a
+    future habluetooth release widens the bleak surface to non-connectable
+    scanners, this test fails and the docs can be relaxed to match.
+    """
+    _feed(scanner, _data_datagram(DEVICE_MAC, -72, 1))
+
+    assert DEVICE_MAC not in await HaBleakScannerWrapper.discover(return_adv=True)
+    assert await HaBleakScannerWrapper.find_device_by_address(DEVICE_MAC) is not None
