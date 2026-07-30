@@ -42,9 +42,18 @@ def _proxy_ready(client: BleProxyClient) -> bool:
     never contacts the device. The ACK behind this event is the only proof
     the device replied.
 
-    ``pysmlight`` exposes no public "connected" signal; this attribute is
-    stable across the supported 0.5.x range and is read in exactly one
-    place so a future public accessor is a one-line swap.
+    ``pysmlight`` exposes no public "connected" signal — ``BleProxyClient``
+    has no ``connected``/``is_connected`` accessor at all. This attribute is
+    byte-identical across every published 0.5.x (0.5.0, 0.5.1, 0.5.2,
+    0.5.3) and is read in exactly one place, so a future public accessor is
+    a one-line swap. ``test_scanner_habluetooth.py`` drives it through a
+    real ACK datagram rather than setting it directly, so a rename in
+    ``pysmlight`` fails CI on the dependency bump instead of surfacing as an
+    ``AttributeError`` in a consumer.
+
+    Note this latches: ``_connect_loop`` breaks out of its retry loop on the
+    first ACK and only ``stop()`` clears the event, so it means "the proxy
+    answered at least once", not "the proxy is reachable now".
     """
     return client._connected_evt.is_set()
 
@@ -258,12 +267,9 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         client = self._client
         if client is None:
             return False
-        # Defensive: guard the asyncio.sleep against non-finite / negative
-        # durations that an external caller might pass. Negative or NaN
-        # would otherwise propagate into a confusing scheduler error.
-        # Zero is refused too: it would cost an arm/restore packet pair
-        # for a window that is over before it opens.
-        if not math.isfinite(duration) or duration <= 0:
+        # Defensive: NaN/inf would raise out of the int() clamp below and
+        # surface as a confusing scheduler error, so they go first.
+        if not math.isfinite(duration):
             return False
         # Arming before the proxy answers would report ACTIVE for the whole
         # window over a radio that never left PASSIVE.
@@ -275,6 +281,13 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
             )
             return False
         timeout_ms = min(int(duration * 1000), _MAX_ACTIVE_WINDOW_MS)
+        # Refuse on the *clamped* value, not on ``duration``: the firmware
+        # field is whole milliseconds, so any sub-millisecond duration
+        # truncates to a 0 ms window and would cost an arm/restore packet
+        # pair for a window that is over before it opens. Negative
+        # durations land here too.
+        if timeout_ms <= 0:
+            return False
         window_end = MONOTONIC_TIME() + timeout_ms / 1000
 
         # Safe: no await between reading and writing ``_window_end``, so
