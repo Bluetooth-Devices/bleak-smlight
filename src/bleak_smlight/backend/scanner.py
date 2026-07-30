@@ -34,26 +34,16 @@ def _proxy_ready(client: BleProxyClient) -> bool:
     """
     Whether the proxy has acknowledged the client's PING.
 
-    Every outbound command on ``BleProxyClient`` — ``set_scan_mode``,
-    ``set_active_window`` — is guarded by ``if self.transport:`` with no
-    ``else``, so before the proxy answers it sends nothing and raises
-    nothing. ``transport`` itself is not a usable readiness signal: it is
-    assigned from a ``create_datagram_endpoint`` bind on ``0.0.0.0`` that
-    never contacts the device. The ACK behind this event is the only proof
-    the device replied.
+    Outbound commands on ``BleProxyClient`` are guarded by ``if
+    self.transport:`` with no ``else``, so before the proxy answers they
+    are dropped silently. ``transport`` is not a substitute signal — it
+    comes from a local ``0.0.0.0`` bind that never contacts the device;
+    the ACK behind this event is the only proof the device replied.
+    ``pysmlight`` exposes no public equivalent, hence the private read,
+    confined to this one call site.
 
-    ``pysmlight`` exposes no public "connected" signal — ``BleProxyClient``
-    has no ``connected``/``is_connected`` accessor at all. This attribute is
-    byte-identical across every published 0.5.x (0.5.0, 0.5.1, 0.5.2,
-    0.5.3) and is read in exactly one place, so a future public accessor is
-    a one-line swap. ``test_scanner_habluetooth.py`` drives it through a
-    real ACK datagram rather than setting it directly, so a rename in
-    ``pysmlight`` fails CI on the dependency bump instead of surfacing as an
-    ``AttributeError`` in a consumer.
-
-    Note this latches: ``_connect_loop`` breaks out of its retry loop on the
-    first ACK and only ``stop()`` clears the event, so it means "the proxy
-    answered at least once", not "the proxy is reachable now".
+    Latches on the first ACK and is cleared only by ``stop()``, so it
+    means "answered at least once", not "reachable now".
     """
     return client._connected_evt.is_set()
 
@@ -106,32 +96,25 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         the local scanner tracks and pins the requested/current modes entirely
         locally based on the integration's intent.
 
-        The firmware command is deferred while the proxy client has not
-        completed its PING/ACK handshake. ``BleProxyClient.start()`` only
-        schedules its connect loop, so a mode set right after it returns
-        would hit ``set_scan_mode``'s ``if self.transport:`` guard — which
-        has no ``else`` — and be dropped without raising. The scanner
-        would then report a mode the radio was never told about. The
-        deferred push re-reads :attr:`_intent`, so the most recent pin
-        wins and repeated calls before the handshake collapse into one. It
-        stands down if an active window opened in the meantime, leaving the
-        window's restore to deliver the same mode.
+        ``requested_mode`` always updates, so the auto-scheduler stops
+        asking for windows immediately. The firmware command itself may be
+        deferred — until the proxy completes its PING/ACK handshake, or
+        until an in-flight active window expires — but never dropped:
+        whichever path runs last re-reads :attr:`_intent`, so the most
+        recent pin wins and repeated calls collapse into one.
 
-        A pin landing while an active window is in flight stands down the
-        same way: ``requested_mode`` updates at once — which stops the
-        scheduler asking for further windows — but ``current_mode`` keeps
-        reporting ACTIVE and no command is sent, because the radio really
-        is active until the window expires. The window's restore reads the
-        live :attr:`_intent`, so the pin lands there instead of being lost.
+        Unlike :meth:`async_request_active_window`, this reports the new
+        mode before the radio has been told. That is safe precisely
+        because the push is deferred rather than abandoned; a window the
+        scheduler has already moved on from has no such second chance.
         """
         self._intent = mode
         self.set_requested_mode(mode)
 
-        # The radio is active for the rest of the window. Reporting ``mode``
-        # now, or pushing it, would desync the scanner from the radio for
-        # the window's remaining span — the same divergence the deferred
-        # push stands down to avoid, and it would leave the open-or-extend
-        # path answering ``True`` over a radio this push sent passive.
+        # The radio is active until the window expires. Reporting or
+        # pushing ``mode`` now would desync the scanner from the radio,
+        # and leave the open-or-extend path answering ``True`` over a
+        # radio this push had just sent passive.
         if self._window_end is not None:
             _LOGGER.debug(
                 "%s: active window in flight; leaving scan mode %s to the "
@@ -172,15 +155,11 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
             await client._connected_evt.wait()
         finally:
             self._pending_mode_push = None
-        # An active window may already have opened: the same ACK that wakes
-        # this task also opens the gate in
+        # The ACK that wakes this task also opens the gate in
         # ``async_request_active_window``, and a scheduler tick already in
-        # the ready queue runs before this callback. Pushing now would send
-        # the firmware out of a window the scanner still reports as ACTIVE
-        # for its full duration — the exact silent divergence this deferral
-        # exists to prevent. The window's own restore path sends the live
-        # ``_intent``, which is what this push would have sent, so standing
-        # down is not a lost command.
+        # the ready queue runs first. Pushing into an open window is the
+        # divergence this deferral exists to prevent; the window's restore
+        # sends the same live ``_intent``, so standing down loses nothing.
         if self._window_end is not None:
             _LOGGER.debug(
                 "%s: active window in flight; leaving the deferred scan mode "
@@ -188,9 +167,8 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
                 self.name,
             )
             return
-        # ``async_set_scanning_mode`` pins ``_intent`` before it ever
-        # creates this task, and nothing clears it, so the latest pin is
-        # always available here.
+        # ``_intent`` is pinned before this task is ever created, and
+        # nothing clears it.
         if TYPE_CHECKING:
             assert self._intent is not None
         self._push_mode(client, self._intent)
@@ -225,43 +203,35 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         """
         Request an active scan window on the proxy for ``duration`` seconds.
 
-        Called by habluetooth's auto-mode scheduler. The restore mode
-        prefers the integration's pinned intent (set via
-        :meth:`async_set_scanning_mode`) — so AUTO returns to PASSIVE on
-        the firmware even though ``requested_mode`` stays AUTO — and
-        falls back to ``requested_mode`` when no intent has been pinned.
+        Called by habluetooth's auto-mode scheduler. On expiry the restore
+        prefers the pinned intent (:meth:`async_set_scanning_mode`) — so
+        AUTO returns to PASSIVE on the firmware even though
+        ``requested_mode`` stays AUTO — and falls back to
+        ``requested_mode`` when nothing was ever pinned.
 
-        A request that arrives while a window is already open extends it
-        rather than opening a second one: re-arming the firmware timer is
-        idempotent, so the longer of the two windows wins and a request
-        that expires sooner is already covered. Both cases return
-        ``True`` — the radio is active for the requested span either
-        way. Only the coroutine that opened the window sleeps and
-        restores the prior mode.
+        A request arriving while a window is open extends it rather than
+        opening a second one: re-arming the firmware timer is idempotent,
+        so the longer window wins. Both cases return ``True`` — the radio
+        is active for the requested span either way — but only the
+        opening coroutine sleeps and restores.
 
         The window never outlasts what the firmware was told: the proxy
         timeout is an unsigned 16-bit millisecond field, so a longer
-        ``duration`` is clamped and the sleep follows the clamp instead of
-        leaving the scanner reporting ACTIVE after the radio went passive.
+        ``duration`` is clamped and the sleep follows the clamp.
 
-        Returns ``False`` without touching the reported mode when the
-        proxy has not completed its handshake — the command would be
-        dropped on the floor, and claiming ACTIVE for a window the radio
-        never opened is worse than reporting the request as ignored.
-
-        Windows are also refused unless ``requested_mode`` is still
-        AUTO: repinning the scanner does not retire its auto-scan
-        worker, so this method is the only place an explicit
-        PASSIVE/ACTIVE pin can be honored.
+        Returns ``False``, without touching the reported mode, when the
+        window cannot be honored: the proxy has not completed its
+        handshake, ``requested_mode`` is no longer AUTO, or ``duration``
+        is non-finite or truncates to a zero-millisecond firmware timer.
+        Claiming ACTIVE for a window the radio never opened is worse than
+        reporting the request as ignored.
         """
-        # habluetooth binds the auto-scan worker at registration time and
-        # only retires it when the scanner is unregistered —
-        # ``scanner_mode_changed`` notifies manager callbacks, not the
-        # scheduler. So a scanner repinned away from AUTO via
-        # ``async_set_scanning_mode`` keeps being ticked, and without this
-        # guard it would keep flipping the firmware to ACTIVE behind an
-        # explicit PASSIVE pin. ``HaScanner`` refuses here for the same
-        # reason.
+        # habluetooth binds the auto-scan worker at registration and only
+        # retires it on unregister — ``scanner_mode_changed`` notifies
+        # manager callbacks, not the scheduler. So a scanner repinned away
+        # from AUTO keeps being ticked, and without this guard it would
+        # flip the firmware to ACTIVE behind an explicit PASSIVE pin.
+        # ``HaScanner`` refuses here for the same reason.
         if self.requested_mode is not BluetoothScanningMode.AUTO:
             return False
         client = self._client
@@ -271,8 +241,6 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
         # surface as a confusing scheduler error, so they go first.
         if not math.isfinite(duration):
             return False
-        # Arming before the proxy answers would report ACTIVE for the whole
-        # window over a radio that never left PASSIVE.
         if not _proxy_ready(client):
             _LOGGER.debug(
                 "%s: proxy has not completed its handshake; "
@@ -281,11 +249,10 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
             )
             return False
         timeout_ms = min(int(duration * 1000), _MAX_ACTIVE_WINDOW_MS)
-        # Refuse on the *clamped* value, not on ``duration``: the firmware
-        # field is whole milliseconds, so any sub-millisecond duration
-        # truncates to a 0 ms window and would cost an arm/restore packet
-        # pair for a window that is over before it opens. Negative
-        # durations land here too.
+        # Refuse on the *clamped* value, not on ``duration``: a
+        # sub-millisecond duration truncates to a 0 ms window, costing an
+        # arm/restore packet pair for a window that is over before it
+        # opens. Negative durations land here too.
         if timeout_ms <= 0:
             return False
         window_end = MONOTONIC_TIME() + timeout_ms / 1000
@@ -314,12 +281,10 @@ class SMLIGHTScanner(BaseHaRemoteScanner):
                 await asyncio.sleep(remaining)
         finally:
             self._window_end = None
-            # Honor a live repin (async_set_scanning_mode is sync and
-            # lock-free, so it can land mid-window) over the snapshot
-            # taken when the window opened. Fall back to the open-time
-            # snapshot only when no intent was ever pinned — there
-            # requested_mode reports ACTIVE mid-window, so a live read
-            # would pin ACTIVE forever.
+            # Honor a repin that landed mid-window over the open-time
+            # snapshot. Fall back to the snapshot only when no intent was
+            # ever pinned — ``requested_mode`` reports ACTIVE mid-window,
+            # so reading it live would pin ACTIVE forever.
             target = self._intent if self._intent is not None else prior
             self.set_current_mode(target)
             restore = _HA_TO_FIRMWARE_MODE.get(
