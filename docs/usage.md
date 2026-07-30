@@ -5,10 +5,22 @@
 Assuming that you've followed the {ref}`installation steps <installation>`,
 you're now ready to use this package.
 
-The SLZB proxy is scan only, so devices are discoverable through `bleak` but not
-connectable.
+The SLZB proxy is scan only, so its advertisements are registered with
+`habluetooth` as **non-connectable**. That has a consequence worth stating up
+front: `bleak.BleakScanner` talks to the local adapter and never consults
+`habluetooth`, and `habluetooth.HaBleakScannerWrapper`'s bleak-compatible
+surface (`discover()`, `discovered_devices`, `detection_callback`) reads the
+_connectable_ history, which a scan-only proxy never populates. Read proxied
+advertisements through one of:
 
-Example usage with `bleak`:
+| Read path                                            | Style     |
+| ---------------------------------------------------- | --------- |
+| `get_manager().async_discovered_service_info(False)` | poll      |
+| `get_manager().async_last_service_info(addr, False)` | poll      |
+| `HaBleakScannerWrapper.find_device_by_address/name`  | poll      |
+| `BluetoothManager._discover_service_info` (override) | streaming |
+
+Example usage:
 
 ```python
 from __future__ import annotations
@@ -30,19 +42,27 @@ SMLIGHT_DEVICES: list[SMLIGHTDeviceConfig] = [
 ]
 
 
+class ProxyBluetoothManager(habluetooth.BluetoothManager):
+    """Receive every proxied advertisement as it arrives."""
+
+    def _discover_service_info(
+        self, service_info: habluetooth.BluetoothServiceInfoBleak
+    ) -> None:
+        print(service_info.address, service_info.name, service_info.rssi)
+
+
 async def example_app() -> None:
     """Example application here."""
-    import bleak
-
     await asyncio.sleep(5)  # Give time for advertisements to be received
 
-    # Use bleak normally here
-    devices = await bleak.BleakScanner.discover(return_adv=True)
-    for d, a in devices.values():
+    # Snapshot of everything seen so far. ``False`` means "the all-scanners
+    # history"; passing ``True`` restricts it to connectable scanners and
+    # would never return a proxy advertisement.
+    for info in habluetooth.get_manager().async_discovered_service_info(False):
         print()
-        print(d)
-        print("-" * len(str(d)))
-        print(a)
+        print(info.device)
+        print("-" * len(str(info.device)))
+        print(info.advertisement)
 
     # Wait forever
     await asyncio.Event().wait()
@@ -51,7 +71,7 @@ async def example_app() -> None:
 async def run() -> None:
     """Run the main application."""
     managers = [SMLIGHTConnectionManager(device) for device in SMLIGHT_DEVICES]
-    await habluetooth.BluetoothManager().async_setup()
+    await ProxyBluetoothManager().async_setup()
     try:
         # start() does not block on the device (the proxy client retries in
         # the background), so gather them concurrently and let any real
@@ -104,6 +124,10 @@ callback, and returns a `SMLIGHTClientData`. It leaves three jobs to the caller:
 import habluetooth
 
 import bleak_smlight
+
+# habluetooth registers its manager singleton inside ``async_setup()``; without
+# this line ``get_manager()`` below raises ``RuntimeError``.
+await habluetooth.BluetoothManager().async_setup()
 
 data = bleak_smlight.connect_scanner(
     "AA:BB:CC:DD:EE:FF", "slzb-1", "10.0.0.5"
