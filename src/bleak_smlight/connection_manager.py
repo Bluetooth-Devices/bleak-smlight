@@ -32,9 +32,12 @@ class SMLIGHTConnectionManager:
 
     Construction is side-effect-free and does not require a running event
     loop; all asyncio work happens in :meth:`start`. The underlying
-    ``BleProxyClient`` owns its own connect/retry loop, so the manager only
-    has to register the scanner with the habluetooth manager and start the
-    proxy client.
+    ``BleProxyClient`` owns a connect/retry loop for *initial* contact, so
+    the manager only has to register the scanner with the habluetooth
+    manager and start the proxy client. That loop exits on the first ACK
+    and is never re-entered, and nothing re-sends a pinned scan mode if the
+    device later reboots — see the architecture docs' connection-lifecycle
+    section.
     """
 
     def __init__(self, config: SMLIGHTDeviceConfig) -> None:

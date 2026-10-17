@@ -64,12 +64,29 @@ What this repository contains:
 
 ## Connection lifecycle and retries
 
-`BleProxyClient` owns its own connect/retry loop. `start()` returns immediately
-after kicking off a background task that pings the proxy, waits for an ACK, and
-retries with exponential backoff if the device is unreachable. Because of this,
-`SMLIGHTConnectionManager.start()` does not block on the first successful
-contact; the scanner is registered up front and begins reporting advertisements
-as soon as packets arrive.
+`BleProxyClient` owns a connect/retry loop for _initial_ contact. `start()`
+returns immediately after kicking off a background task that pings the proxy,
+waits for an ACK, and retries with exponential backoff if the device is
+unreachable. Because of this, `SMLIGHTConnectionManager.start()` does not block
+on the first successful contact; the scanner is registered up front and begins
+reporting advertisements as soon as packets arrive.
+
+That loop exits on the first ACK and is never re-entered. A 2-second ping loop
+then runs for the lifetime of the client, but it does not check that the pings
+are answered, and `pysmlight` exposes no "connection lost" signal. So if the
+device reboots or drops off the network:
+
+- Advertisements resume by themselves once it is back, because the ping loop
+  keeps re-registering the client with the firmware.
+- A scan mode pinned via `SMLIGHTScanner.async_set_scanning_mode` is **not**
+  re-sent. The device comes back at its own default while the scanner still
+  reports the pinned mode.
+- `AUTO` is the exception: each active-scan window sends a fresh window request
+  and, on expiry, a scan-mode restore, so the firmware is told again every
+  cycle.
+
+If you detect a device restart by other means, re-pin the mode — the call is
+idempotent.
 
 `stop()` tears down in order: it stops the proxy client (which sends a disconnect
 packet and closes the UDP socket), unregisters the scanner from `habluetooth`,
