@@ -75,6 +75,31 @@ as soon as packets arrive.
 packet and closes the UDP socket), unregisters the scanner from `habluetooth`,
 and runs the scanner's own teardown callback.
 
+## Security considerations
+
+The proxy protocol has **no authentication**. `pysmlight.BleProxyClient` opens
+an unconnected UDP socket (`local_addr=("0.0.0.0", 0)`) and accepts any
+datagram that arrives on it — the ACK that completes the handshake and every
+advertisement afterward. Anything on the same network segment that can reach
+that ephemeral port can forge the handshake and inject arbitrary
+advertisements, without spoofing the real device's address at all.
+
+This matters beyond "a fake device appears": `habluetooth` resolves each MAC
+to the reading with the best RSSI across all registered scanners, so an
+injected advertisement claiming a stronger signal than a real, legitimately
+seen device **overrides** that device's data — falsifying passive sensor
+readings, presence state, and local names for devices the host already sees
+correctly.
+
+The practical implication: **the network segment the SLZB proxy is reachable
+from is a trust boundary**. Treat it the way you would an unauthenticated
+sensor feed — do not expose the proxy's UDP port to networks you don't
+control. There is no local mitigation available in this library; the fix
+(binding the client socket to the proxy's address so the kernel drops
+off-peer datagrams) belongs in `pysmlight`. See
+[bleak-smlight#24](https://github.com/Bluetooth-Devices/bleak-smlight/issues/24)
+for the full writeup, a reproduction, and remediation options.
+
 ## Who can use it
 
 The library has no Home Assistant dependency. It is plain Python, built on
