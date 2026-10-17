@@ -109,9 +109,13 @@ Run it before pushing — CI runs the same set.
 - **Docstring overruns are the #1 CI failure.** Test functions with long
   descriptive docstrings often cross column 88. Either wrap the summary onto
   multiple lines or shorten it.
-- **`pysmlight.BleProxyClient` already decodes its callback args.** It hands the
-  scanner a colon-formatted MAC string and a signed RSSI `int`, so
-  `_handle_raw_advertisement` passes them straight through — do not re-convert.
+- **Know what `pysmlight` decodes vs. what the scanner must convert.** The
+  proxy callback signature is `(mac_bytes, rssi, address_type, raw_data)` —
+  `Callable[[bytes, int, int, bytes], None]`. `pysmlight` already decodes the
+  signed RSSI `int` (pass it through), but the MAC arrives as raw little-endian
+  `bytes`, **not** a colon-formatted string: `_handle_raw_advertisement` must
+  convert it with `int_to_bluetooth_address(int.from_bytes(mac_bytes, "little"))`.
+  Don't remove that conversion.
 - **Don't add Home Assistant imports.** This library is intentionally HA-free;
   `SMLIGHTConnectionManager` + `SMLIGHTDeviceConfig` is the standalone entry
   point.
