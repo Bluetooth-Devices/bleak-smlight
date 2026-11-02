@@ -105,9 +105,7 @@ import habluetooth
 
 import bleak_smlight
 
-data = bleak_smlight.connect_scanner(
-    "AA:BB:CC:DD:EE:FF", "slzb-1", "10.0.0.5"
-)
+data = bleak_smlight.connect_scanner("AA:BB:CC:DD:EE:FF", "slzb-1", "10.0.0.5")
 unsetup = data.scanner.async_setup()
 unregister = habluetooth.get_manager().async_register_scanner(data.scanner)
 await data.client.start()
